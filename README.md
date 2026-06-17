@@ -1,6 +1,6 @@
 # API-IDEE Agent
 
-Agente IA para el visor de mapas [API-IDEE](https://github.com/Desarrollos-IDEE/API-IDEE). Combina un servidor Django con RAG (Retrieval-Augmented Generation) y un plugin nativo del visor que permite interactuar con el mapa mediante chat.
+Agente IA para el visualizador de mapas [API-IDEE](https://github.com/Desarrollos-IDEE/API-IDEE). Combina un servidor Django con RAG (Retrieval-Augmented Generation) y un plugin nativo del visualizador que permite interactuar con el mapa mediante chat.
 
 ## Arquitectura
 
@@ -75,7 +75,7 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-### 3. Servir el visor
+### 3. Servir el visualizador
 
 En otra terminal, desde la raiz del proyecto:
 
@@ -83,7 +83,7 @@ En otra terminal, desde la raiz del proyecto:
 python -m http.server 8080
 ```
 
-### 4. Abrir el visor
+### 4. Abrir el visualizador
 
 Navegar a `http://localhost:8080/index.html`
 
@@ -207,7 +207,7 @@ No hay que tocar Python. El sistema auto-descubre los YAML al arrancar.
 | Skill | Tools que usa | Descripcion |
 |-------|---------------|-------------|
 | `navigation` | getMapCenter, getCurrentZoom, getMapExtent, zoomTo, setZoom | Navegar por el mapa y buscar ubicaciones |
-| `layer_management` | listActiveLayers, addWMSLayer, removeLayer | Gestionar capas del visor |
+| `layer_management` | listActiveLayers, addWMSLayer, removeLayer | Gestionar capas del visualizador |
 
 ## Estructura del proyecto
 
@@ -256,7 +256,7 @@ apiidee-agent/
 │   ├── chatagent.css                 # Estilos
 │   ├── api.json                      # Definicion del plugin
 │   └── README.md                     # Documentacion del plugin
-├── index.html                        # Pagina de prueba con visor API-IDEE
+├── index.html                        # Pagina de prueba con visualizador API-IDEE
 └── .gitignore
 ```
 
