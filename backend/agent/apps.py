@@ -6,7 +6,9 @@ class AgentConfig(AppConfig):
     name = 'agent'
 
     def ready(self):
-        # Import tools and skills to trigger registration
-        import agent.tools.map_tools  # noqa: F401
-        import agent.skills.navigation  # noqa: F401
-        import agent.skills.layer_management  # noqa: F401
+        # Trigger auto-discovery of tool and skill definitions
+        from agent.tools.registry import get_all_tools
+        from agent.skills.base import SkillRegistry
+
+        get_all_tools()          # loads tools/definitions/*.json
+        SkillRegistry.get_all()  # loads skills/definitions/*.yaml
