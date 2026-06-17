@@ -1,0 +1,27 @@
+{
+  "name": "addWMSLayer",
+  "description": "Add a WMS layer to the map. Requires URL of the WMS service and the layer name.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "URL of the WMS service"
+      },
+      "name": {
+        "type": "string",
+        "description": "Name of the WMS layer"
+      },
+      "legend": {
+        "type": "string",
+        "description": "Legend label for the layer"
+      },
+      "transparent": {
+        "type": "boolean",
+        "description": "Whether the layer is transparent",
+        "default": true
+      }
+    },
+    "required": ["url", "name"]
+  }
+}

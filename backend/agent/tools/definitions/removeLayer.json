@@ -1,0 +1,14 @@
+{
+  "name": "removeLayer",
+  "description": "Remove a layer from the map by its name.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "Name of the layer to remove"
+      }
+    },
+    "required": ["name"]
+  }
+}
