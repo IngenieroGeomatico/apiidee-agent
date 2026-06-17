@@ -1,0 +1,9 @@
+{
+  "name": "getMapExtent",
+  "description": "Get the current geographic extent (bounding box) of the map view. Returns minX, minY, maxX, maxY and SRS.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  }
+}

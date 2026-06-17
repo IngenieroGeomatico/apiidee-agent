@@ -1,0 +1,16 @@
+name: navigation
+description: Navigate the map, search locations, and control the view
+tools:
+  - getMapCenter
+  - getCurrentZoom
+  - getMapExtent
+  - zoomTo
+  - setZoom
+prompt: |
+  When the user wants to navigate the map or find a location:
+  1. Use getMapCenter() to check current position if needed
+  2. Use zoomTo(lat, lon, zoom) to move the map to specific coordinates
+  3. Use setZoom(level) to change zoom level
+  4. Use getCurrentZoom() to check current zoom
+  5. Use getMapExtent() to understand current view bounds
+  Always confirm what you did after executing navigation tools.

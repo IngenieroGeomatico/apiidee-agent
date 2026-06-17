@@ -1,0 +1,14 @@
+{
+  "name": "setZoom",
+  "description": "Set the zoom level of the map.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "level": {
+        "type": "integer",
+        "description": "Zoom level to set"
+      }
+    },
+    "required": ["level"]
+  }
+}
