@@ -236,6 +236,10 @@ class ChatAgent {
 
     var self = this;
 
+    // Disable send until providers are loaded
+    sendBtn.disabled = true;
+    this.inputElement.disabled = true;
+
     // Event listeners
     this._onSendClick = function() { self._sendMessage(); };
     this._onInputKeydown = function(e) {
@@ -268,6 +272,9 @@ class ChatAgent {
 
     // Fetch providers and populate selectors
     this._fetchProviders().then(function() {
+      sendBtn.disabled = false;
+      self.inputElement.disabled = false;
+      self.inputElement.focus();
       var welcome = self.options.welcomeMessage
         || '<p>Soy el asistente de API-IDEE. Puedo ayudarte con:</p>'
         + '<ul>'
@@ -277,6 +284,9 @@ class ChatAgent {
         + '<li>Navegar y buscar en el mapa</li>'
         + '</ul>';
       self._appendMessage('assistant', welcome);
+    }).catch(function() {
+      sendBtn.disabled = false;
+      self.inputElement.disabled = false;
     });
   }
 

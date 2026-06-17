@@ -46,7 +46,15 @@ class Agent:
         if provider_name and model:
             self.provider = get_provider(provider_name, model)
         else:
-            self.provider = get_llm_provider()
+            from django.conf import settings
+            if settings.LLM_PROVIDERS:
+                first = settings.LLM_PROVIDERS[0]
+                self.provider = get_provider(
+                    provider_name or first["name"],
+                    model or first.get("default_model", ""),
+                )
+            else:
+                self.provider = get_llm_provider()
 
     def run(self, user_message: str, history: list,
             map_state: Optional[dict] = None) -> AgentResponse:
