@@ -1,0 +1,44 @@
+
+{
+  "name": "ChatAgent",
+  "description": "Asistente IA integrado para API-IDEE (no compilado)",
+  "version": "1.0.0",
+  "parameters": [
+    {
+      "name": "position",
+      "type": "string",
+      "default": "TR",
+      "description": "Panel position on the map"
+    },
+    {
+      "name": "collapsed",
+      "type": "boolean",
+      "default": true,
+      "description": "Whether the panel starts collapsed"
+    },
+    {
+      "name": "backendUrl",
+      "type": "string",
+      "default": "http://localhost:8000/api",
+      "description": "URL of the Django backend API"
+    },
+    {
+      "name": "tooltip",
+      "type": "string",
+      "default": "Asistente API-IDEE",
+      "description": "Tooltip text for the plugin button"
+    },
+    {
+      "name": "placeholder",
+      "type": "string",
+      "default": "Pregunta sobre API-IDEE...",
+      "description": "Placeholder text for the chat input field"
+    },
+    {
+      "name": "welcomeMessage",
+      "type": "string",
+      "default": "¡Hola! Soy el asistente de API-IDEE. Puedo ayudarte con...",
+      "description": "Initial welcome message in the chat"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "name": "getMapCenter",
+  "description": "Get the current center coordinates of the map. Returns latitude, longitude and SRS.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  }
+}
