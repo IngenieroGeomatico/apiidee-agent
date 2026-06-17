@@ -10,6 +10,7 @@ They do NOT contain agent logic (prompt building, LLM calls, RAG retrieval).
 """
 import json
 
+from django.http import JsonResponse
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -22,7 +23,7 @@ from .serializers import ChatInputSerializer, ConversationSerializer, MessageSer
 
 def providers_list(request):
     """Return all configured providers and their available models (no API keys)."""
-    return Response(get_configured_providers())
+    return JsonResponse(get_configured_providers(), safe=False)
 
 
 class ConversationViewSet(
