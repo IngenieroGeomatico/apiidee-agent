@@ -1,12 +1,22 @@
+"""
+Views — Thin HTTP wrappers that delegate to the Agent.
+
+These views handle:
+- HTTP request/response (serialization, status codes)
+- Persistence (saving messages to DB)
+- Conversation management (create, list, delete)
+
+They do NOT contain agent logic (prompt building, LLM calls, RAG retrieval).
+"""
+import json
+
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from .llm.config import get_llm_provider
+from .agent import Agent
 from .models import Conversation, Message
-from .prompts import SYSTEM_PROMPT
-from .rag.retriever import retrieve_context
-from .serializers import ChatInputSerializer, ConversationSerializer, MessageSerializer
+from .serializers import ChatInputSerializer, ConversationSerializer, MessageSerializer, ToolResultSerializer
 
 
 class ConversationViewSet(
@@ -23,8 +33,7 @@ class ConversationViewSet(
     def messages(self, request, pk=None):
         """List all messages in a conversation."""
         conversation = self.get_object()
-        messages = conversation.messages.all()
-        serializer = MessageSerializer(messages, many=True)
+        serializer = MessageSerializer(conversation.messages.all(), many=True)
         return Response(serializer.data)
 
     @action(detail=True, methods=['post'], url_path='chat')
@@ -32,66 +41,91 @@ class ConversationViewSet(
         """Send a message and get an AI response."""
         conversation = self.get_object()
 
-        # Validate input
         input_serializer = ChatInputSerializer(data=request.data)
         input_serializer.is_valid(raise_exception=True)
         user_content = input_serializer.validated_data['content']
+        map_state = input_serializer.validated_data.get('map_state')
 
-        # Save user message
+        # Persist user message
         Message.objects.create(
             conversation=conversation,
             role=Message.Role.USER,
             content=user_content,
         )
-
-        # Auto-title on first message
         if not conversation.title:
             conversation.title = user_content[:100]
             conversation.save(update_fields=['title'])
 
-        # Retrieve conversation history
-        history = conversation.messages.all()
-        history_messages = [
-            {"role": msg.role, "content": msg.content} for msg in history
-        ]
+        # Build history and delegate to Agent
+        history = _build_history(conversation)
+        agent = Agent()
+        result = agent.run(user_content, history, map_state=map_state)
 
-        # RAG: retrieve relevant context
-        rag_results = retrieve_context(query=user_content)
-        context_text = _format_context(rag_results)
+        # Persist and return response
+        metadata = {"sources": result.sources}
+        if result.tool_calls:
+            metadata["tool_calls"] = result.tool_calls
 
-        # Build messages for LLM
-        system_content = SYSTEM_PROMPT.format(context=context_text)
-        llm_messages = [{"role": "system", "content": system_content}]
-        llm_messages.extend(history_messages)
-
-        # Call LLM
-        provider = get_llm_provider()
-        assistant_content = provider.chat(llm_messages)
-
-        # Build source metadata from RAG results
-        sources = [chunk["metadata"] for chunk in rag_results] if rag_results else []
-
-        # Save assistant message
-        assistant_message = Message.objects.create(
+        assistant_msg = Message.objects.create(
             conversation=conversation,
             role=Message.Role.ASSISTANT,
-            content=assistant_content,
-            metadata={"sources": sources},
+            content=result.content,
+            metadata=metadata,
         )
 
-        serializer = MessageSerializer(assistant_message)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        data = MessageSerializer(assistant_msg).data
+        data["type"] = result.type
+        if result.tool_calls:
+            data["tool_calls"] = result.tool_calls
+        return Response(data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='tool-result')
+    def tool_result(self, request, pk=None):
+        """Receive tool execution results from the plugin."""
+        conversation = self.get_object()
+
+        serializer = ToolResultSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        tool_name = serializer.validated_data['tool_name']
+        tool_call_id = serializer.validated_data['tool_call_id']
+        result_data = serializer.validated_data['result']
+        success = serializer.validated_data['success']
+
+        # Persist tool result
+        Message.objects.create(
+            conversation=conversation,
+            role=Message.Role.SYSTEM,
+            content=json.dumps({"tool": tool_name, "result": result_data, "success": success}),
+            metadata={"role": "tool", "tool_call_id": tool_call_id, "tool_name": tool_name},
+        )
+
+        # Delegate to Agent
+        history = _build_history(conversation)
+        agent = Agent()
+        result = agent.process_tool_result(tool_name, result_data, success, history)
+
+        # Persist and return
+        assistant_msg = Message.objects.create(
+            conversation=conversation,
+            role=Message.Role.ASSISTANT,
+            content=result.content,
+            metadata={"sources": result.sources},
+        )
+
+        data = MessageSerializer(assistant_msg).data
+        data["type"] = result.type
+        return Response(data, status=status.HTTP_201_CREATED)
 
 
-def _format_context(rag_results: list) -> str:
-    """Format RAG results into a context string for the system prompt."""
-    if not rag_results:
-        return "No additional context available."
-
-    parts = ["Relevant context from the API-IDEE codebase:\n"]
-    for i, chunk in enumerate(rag_results, 1):
-        source = chunk["metadata"].get("source", "unknown")
-        parts.append(f"--- Source {i}: {source} ---")
-        parts.append(chunk["content"])
-        parts.append("")
-    return "\n".join(parts)
+def _build_history(conversation) -> list:
+    """Convert conversation messages to list of dicts for the Agent."""
+    messages = []
+    for msg in conversation.messages.all():
+        m = {"role": msg.role, "content": msg.content}
+        if msg.metadata.get("tool_calls"):
+            m["tool_calls"] = msg.metadata["tool_calls"]
+        if msg.metadata.get("role") == "tool":
+            m["role"] = "tool"
+            m["tool_call_id"] = msg.metadata.get("tool_call_id", "")
+        messages.append(m)
+    return messages
