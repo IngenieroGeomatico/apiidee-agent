@@ -287,6 +287,82 @@
     </div>
   `;
 
+  // Tool executor — maps tool names to IDEE.Map calls
+  const TOOL_MAP = {
+    getMapCenter: function(map) {
+      var center = map.getCenter();
+      return { lat: center.y, lon: center.x, srs: map.getProjection().code };
+    },
+    getCurrentZoom: function(map) {
+      return { level: map.getZoom() };
+    },
+    listActiveLayers: function(map) {
+      var layers = map.getLayers();
+      return layers.map(function(layer) {
+        return {
+          name: layer.name || '',
+          type: layer.type || '',
+          visible: layer.isVisible ? layer.isVisible() : true,
+          legend: layer.legend || '',
+        };
+      });
+    },
+    getMapExtent: function(map) {
+      var bbox = map.getBbox();
+      return {
+        minX: bbox.x.min,
+        minY: bbox.y.min,
+        maxX: bbox.x.max,
+        maxY: bbox.y.max,
+        srs: map.getProjection().code,
+      };
+    },
+    addWMSLayer: function(map, args) {
+      var layer = new IDEE.layer.WMS({
+        url: args.url,
+        name: args.name,
+        legend: args.legend || args.name,
+        transparent: args.transparent !== undefined ? args.transparent : true,
+        tiled: false,
+      });
+      map.addLayers([layer]);
+      return { success: true, name: args.name };
+    },
+    zoomTo: function(map, args) {
+      map.setCenter({ x: args.lon, y: args.lat });
+      if (args.zoom !== undefined) {
+        map.setZoom(args.zoom);
+      }
+      return { success: true };
+    },
+    removeLayer: function(map, args) {
+      var layers = map.getLayers();
+      var target = layers.find(function(l) { return l.name === args.name; });
+      if (target) {
+        map.removeLayers([target]);
+        return { success: true, name: args.name };
+      }
+      return { success: false, error: 'Layer not found: ' + args.name };
+    },
+    setZoom: function(map, args) {
+      map.setZoom(args.level);
+      return { success: true, level: args.level };
+    },
+  };
+
+  function executeTool(map, toolName, args) {
+    var executor = TOOL_MAP[toolName];
+    if (!executor) {
+      return { success: false, error: 'Unknown tool: ' + toolName };
+    }
+    try {
+      return executor(map, args || {});
+    } catch (err) {
+      console.error('Tool execution error (' + toolName + '):', err);
+      return { success: false, error: err.message || String(err) };
+    }
+  }
+
   // Helper functions for DOM manipulation and messaging
   function escapeHtml(unsafe) {
     return unsafe
@@ -384,6 +460,20 @@
       }
     }
 
+    getMapState() {
+      if (!this.map_) return null;
+      try {
+        var center = this.map_.getCenter();
+        return {
+          center: { lat: center.y, lon: center.x },
+          zoom: this.map_.getZoom(),
+          srs: this.map_.getProjection().code,
+        };
+      } catch (e) {
+        return null;
+      }
+    }
+
     async sendMessage(event) {
       if (event && event.preventDefault) { event.preventDefault(); }
       const content = this.inputElement.value.trim();
@@ -394,31 +484,84 @@
 
       if (!this.conversationId) {
         await this.createConversation();
-        if (!this.conversationId) return; // If conversation creation failed
+        if (!this.conversationId) return;
       }
 
       this.appendMessage('user', content);
       this.showLoading(true);
 
       try {
+        const mapState = this.getMapState();
         const res = await fetch(
           `${this.backendUrl}/conversations/${this.conversationId}/chat/`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content }),
+            body: JSON.stringify({ content, map_state: mapState }),
           }
         );
         if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
         const data = await res.json();
 
-        this.appendMessage('assistant', data.content, data.metadata?.sources);
+        // Handle tool calls from the server
+        if (data.type === 'tool_call' && data.tool_calls && data.tool_calls.length > 0) {
+          if (data.content) {
+            this.appendMessage('assistant', data.content);
+          }
+          await this.handleToolCalls(data.tool_calls);
+        } else {
+          this.appendMessage('assistant', data.content, data.metadata?.sources);
+        }
       } catch (error) {
         console.error('Error sending message:', error);
         this.appendMessage('system', 'Error al enviar el mensaje. Por favor, inténtalo de nuevo.');
       } finally {
         this.showLoading(false);
         this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+      }
+    }
+
+    async handleToolCalls(toolCalls) {
+      for (const tc of toolCalls) {
+        const toolName = tc.name;
+        const toolArgs = tc.args || {};
+        const toolCallId = tc.id || '';
+
+        // Execute tool on the map
+        const result = executeTool(this.map_, toolName, toolArgs);
+
+        // Send result back to the server
+        try {
+          const res = await fetch(
+            `${this.backendUrl}/conversations/${this.conversationId}/tool-result/`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                tool_name: toolName,
+                tool_call_id: toolCallId,
+                result: result,
+                success: result.success !== false,
+              }),
+            }
+          );
+          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+          const data = await res.json();
+
+          // The server returns the final LLM response after processing the tool result
+          if (data.type === 'tool_call' && data.tool_calls && data.tool_calls.length > 0) {
+            // Chain: more tool calls needed
+            if (data.content) {
+              this.appendMessage('assistant', data.content);
+            }
+            await this.handleToolCalls(data.tool_calls);
+          } else {
+            this.appendMessage('assistant', data.content, data.metadata?.sources);
+          }
+        } catch (error) {
+          console.error('Error sending tool result:', error);
+          this.appendMessage('system', 'Error al ejecutar la herramienta. Por favor, inténtalo de nuevo.');
+        }
       }
     }
 
