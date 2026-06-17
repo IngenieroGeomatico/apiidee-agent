@@ -16,6 +16,11 @@ env/
 .env
 *.env.local
 
+# Provider credentials (contains API keys)
+backend/providers.json
+servidor/providers.json
+servidor/providers.json.example
+
 # Django
 *.sqlite3
 db.sqlite3
@@ -24,6 +29,7 @@ media/
 
 # FAISS indexes (generated, not tracked)
 backend/vectorstore_data/
+servidor/vectorstore_data/
 
 # IDE
 .vscode/

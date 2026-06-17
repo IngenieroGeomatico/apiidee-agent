@@ -40,12 +40,45 @@ class BaseLLMProvider(ABC):
         return HumanMessage(content=content)
 
 
-class OpenAIProvider(BaseLLMProvider):
-    def __init__(self):
+class OpenAICompatibleProvider(BaseLLMProvider):
+    """Generic provider for any OpenAI-compatible API endpoint."""
+
+    def __init__(self, base_url: str, api_key: str, model: str):
         from langchain_openai import ChatOpenAI
 
+        self.model = model
+        self.llm = ChatOpenAI(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=0.1,
+        )
+
+    def chat(self, messages, tools=None):
+        lc_messages = [self._convert_message(m) for m in messages]
+
+        llm = self.llm
+        if tools:
+            llm = self.llm.bind_tools(tools)
+
+        response = llm.invoke(lc_messages)
+
+        if hasattr(response, "tool_calls") and response.tool_calls:
+            tool_calls = [
+                {"name": tc["name"], "args": tc["args"], "id": tc.get("id", "")}
+                for tc in response.tool_calls
+            ]
+            return ChatResponse(content=response.content or "", tool_calls=tool_calls)
+
+        return ChatResponse(content=response.content)
+
+
+class OpenAIProvider(BaseLLMProvider):
+    def __init__(self):
         if not settings.OPENAI_API_KEY:
             raise ValueError("OPENAI_API_KEY is not set in environment variables.")
+
+        from langchain_openai import ChatOpenAI
 
         self.llm = ChatOpenAI(
             model=settings.LLM_MODEL,
@@ -74,10 +107,10 @@ class OpenAIProvider(BaseLLMProvider):
 
 class GeminiProvider(BaseLLMProvider):
     def __init__(self):
-        from langchain_google_genai import ChatGoogleGenerativeAI
-
         if not settings.GOOGLE_API_KEY:
             raise ValueError("GOOGLE_API_KEY is not set in environment variables.")
+
+        from langchain_google_genai import ChatGoogleGenerativeAI
 
         self.llm = ChatGoogleGenerativeAI(
             model=settings.LLM_MODEL,
