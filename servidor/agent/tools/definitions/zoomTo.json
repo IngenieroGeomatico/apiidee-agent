@@ -1,0 +1,22 @@
+{
+  "name": "zoomTo",
+  "description": "Move the map center to specific coordinates, optionally setting the zoom level.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "lat": {
+        "type": "number",
+        "description": "Latitude of the target location"
+      },
+      "lon": {
+        "type": "number",
+        "description": "Longitude of the target location"
+      },
+      "zoom": {
+        "type": "integer",
+        "description": "Optional zoom level to set"
+      }
+    },
+    "required": ["lat", "lon"]
+  }
+}
