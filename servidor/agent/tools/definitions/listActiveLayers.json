@@ -1,0 +1,9 @@
+{
+  "name": "listActiveLayers",
+  "description": "List all active layers currently displayed on the map. Returns id, name, type, and visibility for each layer.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  }
+}

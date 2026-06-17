@@ -1,0 +1,9 @@
+{
+  "name": "getCurrentZoom",
+  "description": "Get the current zoom level of the map.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  }
+}
