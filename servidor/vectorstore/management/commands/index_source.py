@@ -25,11 +25,18 @@ class Command(BaseCommand):
             default=None,
             help='Source name (defaults to last segment of URL)',
         )
+        parser.add_argument(
+            '--batch-size',
+            type=int,
+            default=100,
+            help='Chunks per embedding batch (lower = less memory, default: 100)',
+        )
 
     def handle(self, *args, **options):
         url = options['url'].rstrip('/')
         source_type = options['type']
         name = options['name'] or url.rstrip('/').split('/')[-1]
+        batch_size = options['batch_size']
 
         self.stdout.write(f"Indexing [{source_type}]: {url}")
         self.stdout.write(f"Name: {name}")
@@ -45,7 +52,7 @@ class Command(BaseCommand):
         )
 
         try:
-            chunks_count = index_source(url, name, source_type=source_type)
+            chunks_count = index_source(url, name, source_type=source_type, batch_size=batch_size)
 
             source.status = 'ready'
             source.chunks_count = chunks_count

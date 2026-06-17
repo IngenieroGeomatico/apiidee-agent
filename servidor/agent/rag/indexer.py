@@ -49,19 +49,20 @@ class BaseIndexer(ABC):
         """
         pass
 
-    def index(self, url: str, name: str) -> int:
+    def index(self, url: str, name: str, batch_size: int = 100) -> int:
         """
         Full indexing pipeline: collect chunks, embed, store in FAISS.
 
         Args:
             url: URL of the knowledge source.
             name: Name used for the FAISS store directory.
+            batch_size: Number of chunks to embed per batch (lower = less memory).
 
         Returns:
             Number of chunks created.
         """
         from langchain_community.vectorstores import FAISS
-        from langchain_openai import OpenAIEmbeddings
+        from .embeddings import get_embeddings
 
         logger.info("[%s] Collecting chunks from %s ...", self.source_type, url)
         all_chunks = self.collect_chunks(url)
@@ -72,12 +73,26 @@ class BaseIndexer(ABC):
             return 0
 
         logger.info("[%s] Embedding and building FAISS index ...", self.source_type)
-        embeddings = OpenAIEmbeddings(api_key=settings.OPENAI_API_KEY)
+        embeddings = get_embeddings()
 
-        texts = [c["content"] for c in all_chunks]
-        metadatas = [c["metadata"] for c in all_chunks]
+        store = None
+        for i in range(0, len(all_chunks), batch_size):
+            batch = all_chunks[i : i + batch_size]
+            texts = [c["content"] for c in batch]
+            metadatas = [c["metadata"] for c in batch]
 
-        store = FAISS.from_texts(texts, embeddings, metadatas=metadatas)
+            if store is None:
+                store = FAISS.from_texts(texts, embeddings, metadatas=metadatas)
+            else:
+                store.add_texts(texts, metadatas=metadatas)
+
+            logger.info(
+                "[%s] Indexed batch %d/%d (%d chunks)",
+                self.source_type,
+                i // batch_size + 1,
+                (len(all_chunks) + batch_size - 1) // batch_size,
+                len(texts),
+            )
 
         store_path = Path(settings.VECTORSTORE_DIR) / name
         store_path.mkdir(parents=True, exist_ok=True)
@@ -280,7 +295,7 @@ def get_indexer(source_type: str) -> BaseIndexer:
     return cls()
 
 
-def index_source(url: str, name: str, source_type: str = "git") -> int:
+def index_source(url: str, name: str, source_type: str = "git", batch_size: int = 100) -> int:
     """
     Index a knowledge source.
 
@@ -290,15 +305,16 @@ def index_source(url: str, name: str, source_type: str = "git") -> int:
         url: URL of the source (git repo URL or web page URL).
         name: Name for the FAISS store directory.
         source_type: "git" or "web".
+        batch_size: Number of chunks to embed per batch (lower = less memory).
 
     Returns:
         Number of chunks created.
     """
     indexer = get_indexer(source_type)
-    return indexer.index(url, name)
+    return indexer.index(url, name, batch_size=batch_size)
 
 
 # Backward compatibility
-def index_repository(repo_url: str, repo_name: str) -> int:
+def index_repository(repo_url: str, repo_name: str, batch_size: int = 100) -> int:
     """Legacy wrapper — calls index_source with source_type='git'."""
-    return index_source(repo_url, repo_name, source_type="git")
+    return index_source(repo_url, repo_name, source_type="git", batch_size=batch_size)

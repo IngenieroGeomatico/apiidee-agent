@@ -15,8 +15,14 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from .agent import Agent
+from .llm.config import get_configured_providers
 from .models import Conversation, Message
 from .serializers import ChatInputSerializer, ConversationSerializer, MessageSerializer, ToolResultSerializer
+
+
+def providers_list(request):
+    """Return all configured providers and their available models (no API keys)."""
+    return Response(get_configured_providers())
 
 
 class ConversationViewSet(
@@ -45,6 +51,8 @@ class ConversationViewSet(
         input_serializer.is_valid(raise_exception=True)
         user_content = input_serializer.validated_data['content']
         map_state = input_serializer.validated_data.get('map_state')
+        provider_name = input_serializer.validated_data.get('provider')
+        model = input_serializer.validated_data.get('model')
 
         # Persist user message
         Message.objects.create(
@@ -58,7 +66,7 @@ class ConversationViewSet(
 
         # Build history and delegate to Agent
         history = _build_history(conversation)
-        agent = Agent()
+        agent = Agent(provider_name=provider_name, model=model)
         result = agent.run(user_content, history, map_state=map_state)
 
         # Persist and return response
@@ -90,6 +98,8 @@ class ConversationViewSet(
         tool_call_id = serializer.validated_data['tool_call_id']
         result_data = serializer.validated_data['result']
         success = serializer.validated_data['success']
+        provider_name = serializer.validated_data.get('provider')
+        model = serializer.validated_data.get('model')
 
         # Persist tool result
         Message.objects.create(
@@ -101,7 +111,7 @@ class ConversationViewSet(
 
         # Delegate to Agent
         history = _build_history(conversation)
-        agent = Agent()
+        agent = Agent(provider_name=provider_name, model=model)
         result = agent.process_tool_result(tool_name, result_data, success, history)
 
         # Persist and return

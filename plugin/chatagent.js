@@ -120,6 +120,9 @@ class ChatAgent {
     this.messagesContainer = null;
     this.inputElement = null;
     this.loadingEl = null;
+    this.providers = [];
+    this.selectedProvider = null;
+    this.selectedModel = null;
   }
 
   getHelp() {
@@ -160,6 +163,10 @@ class ChatAgent {
       +     'Asistente API-IDEE'
       +   '</header>'
       +   '<section id="m-chatagent-body" class="m-chatagent-body">'
+      +     '<div class="chatagent-provider-bar" id="chatagent-provider-bar">'
+      +       '<select id="chatagent-provider-select" class="chatagent-select" title="Proveedor IA"></select>'
+      +       '<select id="chatagent-model-select" class="chatagent-select" title="Modelo"></select>'
+      +     '</div>'
       +     '<div id="chatagent-messages" class="chatagent-messages"></div>'
       +     '<div class="chatagent-loading" id="chatagent-loading">'
       +       '<div class="dot"></div><div class="dot"></div><div class="dot"></div>'
@@ -220,6 +227,8 @@ class ChatAgent {
     this.inputElement = document.querySelector('#chatagent-input');
     this.loadingEl = document.querySelector('#chatagent-loading');
     var sendBtn = document.querySelector('#chatagent-send');
+    var providerSelect = document.querySelector('#chatagent-provider-select');
+    var modelSelect = document.querySelector('#chatagent-model-select');
 
     if (!this.messagesContainer || !this.inputElement || !sendBtn) {
       return;
@@ -244,16 +253,31 @@ class ChatAgent {
     this.inputElement.addEventListener('keydown', this._onInputKeydown);
     this.inputElement.addEventListener('input', this._onInputChange);
 
-    // Welcome message
-    var welcome = this.options.welcomeMessage
-      || '<p>Soy el asistente de API-IDEE. Puedo ayudarte con:</p>'
-      + '<ul>'
-      + '<li>Usar el visor de mapas</li>'
-      + '<li>Capas WMS, WMTS, WFS...</li>'
-      + '<li>Desarrollar plugins</li>'
-      + '<li>Navegar y buscar en el mapa</li>'
-      + '</ul>';
-    this._appendMessage('assistant', welcome);
+    // Provider/model selectors
+    if (providerSelect) {
+      providerSelect.addEventListener('change', function() {
+        self.selectedProvider = providerSelect.value;
+        self._updateModelSelect(self.selectedProvider);
+      });
+    }
+    if (modelSelect) {
+      modelSelect.addEventListener('change', function() {
+        self.selectedModel = modelSelect.value;
+      });
+    }
+
+    // Fetch providers and populate selectors
+    this._fetchProviders().then(function() {
+      var welcome = self.options.welcomeMessage
+        || '<p>Soy el asistente de API-IDEE. Puedo ayudarte con:</p>'
+        + '<ul>'
+        + '<li>Usar el visor de mapas</li>'
+        + '<li>Capas WMS, WMTS, WFS...</li>'
+        + '<li>Desarrollar plugins</li>'
+        + '<li>Navegar y buscar en el mapa</li>'
+        + '</ul>';
+      self._appendMessage('assistant', welcome);
+    });
   }
 
   _onDeactivate() {
@@ -275,6 +299,63 @@ class ChatAgent {
     this.map_ = null;
     this.panel_ = null;
     this.control_ = null;
+  }
+
+  /* ------------------------------------------------------------------
+     Provider / Model selection
+     ------------------------------------------------------------------ */
+
+  async _fetchProviders() {
+    try {
+      var res = await fetch(this.options.backendUrl + '/providers/');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      this.providers = await res.json();
+      this._populateSelectors();
+    } catch (error) {
+      console.error('Error fetching providers:', error);
+    }
+  }
+
+  _populateSelectors() {
+    var providerSelect = document.querySelector('#chatagent-provider-select');
+    var modelSelect = document.querySelector('#chatagent-model-select');
+    if (!providerSelect || !modelSelect || !this.providers.length) return;
+
+    providerSelect.innerHTML = '';
+    this.providers.forEach(function(p, idx) {
+      var opt = document.createElement('option');
+      opt.value = p.name;
+      opt.textContent = p.name;
+      providerSelect.appendChild(opt);
+    });
+
+    // Select first provider and populate its models
+    this.selectedProvider = this.providers[0].name;
+    providerSelect.value = this.selectedProvider;
+    this._updateModelSelect(this.selectedProvider);
+  }
+
+  _updateModelSelect(providerName) {
+    var modelSelect = document.querySelector('#chatagent-model-select');
+    if (!modelSelect) return;
+
+    var provider = this.providers.find(function(p) { return p.name === providerName; });
+    if (!provider) return;
+
+    modelSelect.innerHTML = '';
+    provider.models.forEach(function(m) {
+      var opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.label;
+      modelSelect.appendChild(opt);
+    });
+
+    // Select default model or first available
+    var defaultModel = provider.default_model;
+    if (defaultModel && provider.models.some(function(m) { return m.id === defaultModel; })) {
+      modelSelect.value = defaultModel;
+    }
+    this.selectedModel = modelSelect.value;
   }
 
   /* ------------------------------------------------------------------
@@ -329,12 +410,16 @@ class ChatAgent {
 
     try {
       var mapState = this._getMapState();
+      var body = { content: content, map_state: mapState };
+      if (this.selectedProvider) body.provider = this.selectedProvider;
+      if (this.selectedModel) body.model = this.selectedModel;
+
       var res = await fetch(
         this.options.backendUrl + '/conversations/' + this.conversationId + '/chat/',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: content, map_state: mapState }),
+          body: JSON.stringify(body),
         }
       );
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -365,17 +450,21 @@ class ChatAgent {
       var result = chatagentExecuteTool(this.map_, tc.name, tc.args || {});
 
       try {
+        var body = {
+          tool_name: tc.name,
+          tool_call_id: tc.id || '',
+          result: result,
+          success: result.success !== false,
+        };
+        if (this.selectedProvider) body.provider = this.selectedProvider;
+        if (this.selectedModel) body.model = this.selectedModel;
+
         var res = await fetch(
           this.options.backendUrl + '/conversations/' + this.conversationId + '/tool-result/',
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              tool_name: tc.name,
-              tool_call_id: tc.id || '',
-              result: result,
-              success: result.success !== false,
-            }),
+            body: JSON.stringify(body),
           }
         );
         if (!res.ok) throw new Error('HTTP ' + res.status);

@@ -9,7 +9,7 @@ Concepts:
 import json
 from typing import Optional
 
-from .llm.config import get_llm_provider
+from .llm.config import get_llm_provider, get_provider
 from .prompts import SYSTEM_PROMPT
 from .rag.retriever import retrieve_context
 from .skills.base import SkillRegistry
@@ -40,9 +40,13 @@ class Agent:
     That's the view's job.
     """
 
-    def __init__(self):
-        self.provider = get_llm_provider()
+    def __init__(self, provider_name: Optional[str] = None,
+                 model: Optional[str] = None):
         self.skill_registry = SkillRegistry()
+        if provider_name and model:
+            self.provider = get_provider(provider_name, model)
+        else:
+            self.provider = get_llm_provider()
 
     def run(self, user_message: str, history: list,
             map_state: Optional[dict] = None) -> AgentResponse:

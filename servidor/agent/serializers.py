@@ -22,6 +22,8 @@ class ConversationSerializer(serializers.ModelSerializer):
 class ChatInputSerializer(serializers.Serializer):
     content = serializers.CharField(max_length=10000)
     map_state = serializers.JSONField(required=False, default=None)
+    provider = serializers.CharField(max_length=100, required=False, default=None)
+    model = serializers.CharField(max_length=200, required=False, default=None)
 
 
 class ToolResultSerializer(serializers.Serializer):
@@ -29,3 +31,5 @@ class ToolResultSerializer(serializers.Serializer):
     tool_call_id = serializers.CharField(max_length=200, required=False, default="")
     result = serializers.JSONField(default=dict)
     success = serializers.BooleanField(default=True)
+    provider = serializers.CharField(max_length=100, required=False, default=None)
+    model = serializers.CharField(max_length=200, required=False, default=None)

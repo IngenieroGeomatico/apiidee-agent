@@ -44,6 +44,30 @@
   user-select: none;
 }
 
+/* Provider bar */
+.chatagent-provider-bar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.chatagent-select {
+  flex: 1;
+  font-size: 0.8em;
+  padding: 4px 6px;
+  border: 1px solid var(--chatagent-border);
+  border-radius: 6px;
+  background-color: #fff;
+  color: var(--chatagent-assistant-text);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.chatagent-select:focus {
+  outline: none;
+  border-color: var(--chatagent-primary);
+}
+
 /* Chat body */
 .m-chatagent-body {
   display: flex;

@@ -25,10 +25,72 @@ Agente IA para el visualizador de mapas [API-IDEE](https://github.com/Desarrollo
 
 | Concepto | Que es | Donde vive |
 |----------|--------|------------|
-| **Agent** | El cerebro. Orquesta RAG, skills, tools y LLM para responder al usuario | `backend/agent/agent.py` |
-| **Tool** | Una accion atomica que el agente puede invocar en el mapa (se ejecuta en el navegador) | `backend/agent/tools/definitions/*.json` + `plugin/chatagent.js` (TOOL_MAP) |
-| **Skill** | Conocimiento de dominio: agrupa tools + prompt especializado que ensena al agente cuando y como usarlos | `backend/agent/skills/definitions/*.yaml` |
-| **RAG** | Busqueda semantica sobre repositorios y webs indexadas para dar contexto al agente | `backend/agent/rag/` + `backend/vectorstore/` |
+| **Agent** | El cerebro. Orquesta RAG, skills, tools y LLM para responder al usuario | `servidor/agent/agent.py` |
+| **Tool** | Una accion atomica que el agente puede invocar en el mapa (se ejecuta en el navegador) | `servidor/agent/tools/definitions/*.json` + `plugin/chatagent.js` |
+| **Skill** | Conocimiento de dominio: agrupa tools + prompt especializado que ensena al agente cuando y como usarlos | `servidor/agent/skills/definitions/*.yaml` |
+| **RAG** | Busqueda semantica sobre repositorios y webs indexadas para dar contexto al agente | `servidor/agent/rag/` + `servidor/vectorstore/` |
+| **Embeddings** | Modelo que convierte texto en vectores para busqueda semantica (local, OpenAI o Gemini) | `servidor/agent/rag/embeddings.py` |
+
+## Arquitectura: como se conectan Agent, Skills, Tools, Embeddings
+
+```
+                    ┌──────────────────────────────────────┐
+                    │            USUARIO (Chat)             │
+                    └──────────────┬───────────────────────┘
+                                   │
+                    ┌──────────────▼───────────────────────┐
+                    │              AGENT                    │
+                    │        (servidor/agent/agent.py)      │
+                    │                                      │
+                    │  1. Recibe el mensaje del usuario     │
+                    │  2. Consulta RAG para contexto        │
+                    │  3. Construye system prompt con:      │
+                    │     - Prompt base                     │
+                    │     - Skills activos (tools + prompt) │
+                    │     - Contexto RAG                    │
+                    │     - Estado del mapa                 │
+                    │  4. Llama al LLM con tools disponibles│
+                    │  5. Devuelve texto o tool_call        │
+                    └────┬─────────┬──────────┬────────────┘
+                         │         │          │
+                         │         │          │
+          ┌──────────────▼──┐ ┌───▼────────┐ │
+          │     RAG         │ │   LLM      │ │
+          │ (contexto       │ │ (Gemini /  │ │
+          │  semantico)     │ │  OpenAI)   │ │
+          │                 │ │            │ │
+          │  FAISS stores   │ │            │ │
+          │  ↑              │ │            │ │
+          │  Embeddings     │ │            │ │
+          │  (local/API)    │ │            │ │
+          └─────────────────┘ └────────────┘ │
+                                             │
+                         ┌───────────────────▼──────────┐
+                         │        TOOLS (plugin JS)      │
+                         │  Ej: zoomTo, addWMSLayer, ... │
+                         │  Se ejecutan en el navegador  │
+                         └──────────────────────────────┘
+```
+
+### Flujo detallado
+
+1. **Skills** → definen herramientas + contexto de uso. Ej: el skill `navigation` agrupa `zoomTo`, `getMapCenter` y da instrucciones al LLM sobre como navegar.
+
+2. **Tools** → acciones atomicas definidas en JSON (servidor) e implementadas en JS (plugin). El LLM decide cual invocar segun la peticion del usuario.
+
+3. **RAG (Embeddings + FAISS)** → los documentos se trocean en chunks, se convierten a vectores con un modelo de embeddings y se guardan en FAISS. En cada consulta, el mensaje del usuario se convierte al mismo tipo de vector y se buscan los chunks mas similares.
+
+4. **Agent** → orquesta todo: recibe el mensaje, pide contexto a RAG, inyecta los skills activos y el estado del mapa en el prompt, llama al LLM, y si el LLM devuelve un tool_call, lo reenvia al plugin para ejecutarlo.
+
+### Donde se configura cada pieza
+
+| Pieza | Configuracion | Proveedores |
+|-------|--------------|-------------|
+| **LLM** | `LLM_PROVIDER` + `LLM_MODEL` en `.env` | Gemini, OpenAI |
+| **Embeddings** | `EMBEDDINGS_PROVIDER` + `EMBEDDINGS_MODEL` en `.env` | Local (FastEmbed), OpenAI, Gemini |
+| **Tools** | JSON en `servidor/agent/tools/definitions/` | Auto-descubiertos al arrancar |
+| **Skills** | YAML en `servidor/agent/skills/definitions/` | Auto-descubiertos al arrancar |
+| **RAG** | `index_source` CLI + `VECTORSTORE_DIR` en `.env` | FAISS + embeddings |
 
 ## Requisitos
 
@@ -50,7 +112,7 @@ cd apiidee-agent
 ### 2. Configurar el servidor
 
 ```bash
-cd backend
+cd servidor
 
 # Crear entorno virtual
 python -m venv .venv
@@ -89,7 +151,7 @@ Navegar a `http://localhost:8080/index.html`
 
 ## Configuracion
 
-Editar `backend/.env`:
+Editar `servidor/.env`:
 
 ```env
 # --- Proveedor LLM ---
@@ -117,7 +179,7 @@ ALLOWED_ORIGINS=http://localhost:8080,http://localhost:3000
 El agente necesita conocimiento para responder. Usa el comando `index_source` para indexar repositorios git o documentacion web:
 
 ```bash
-cd backend
+cd servidor
 
 # Indexar un repositorio git
 python manage.py index_source https://github.com/Desarrollos-IDEE/API-IDEE --type git
@@ -127,9 +189,14 @@ python manage.py index_source https://github.com/Desarrollos-IDEE/API-IDEE/wiki 
 
 # Con nombre personalizado
 python manage.py index_source https://componentes.idee.es/api-idee/doc/ --type web --name api-idee-docs
+
+# Reducir batch-size si tienes poca RAM (procesa chunks de 50 en 50)
+python manage.py index_source https://github.com/Desarrollos-IDEE/API-IDEE --type git --batch-size 50
 ```
 
-Los indices se guardan en `backend/vectorstore_data/` (no se suben al repo).
+Los indices se guardan en `servidor/vectorstore_data/` (no se suben al repo).
+
+> **Nota**: `--batch-size` controla cuantos chunks se embeden a la vez. Por defecto 100. Reducirlo baja el consumo de RAM pero ralentiza el proceso.
 
 ## Anadir tools
 
@@ -137,7 +204,7 @@ Los tools son acciones que el agente puede ejecutar en el mapa. Tienen dos parte
 
 ### 1. Definicion (servidor)
 
-Crear un fichero JSON en `backend/agent/tools/definitions/`:
+Crear un fichero JSON en `servidor/agent/tools/definitions/`:
 
 ```json
 {
@@ -184,7 +251,7 @@ No hay que tocar Python. El sistema auto-descubre los JSON al arrancar.
 
 Los skills ensenyan al agente cuando y como usar un grupo de tools. Son ficheros YAML.
 
-Crear un fichero en `backend/agent/skills/definitions/`:
+Crear un fichero en `servidor/agent/skills/definitions/`:
 
 ```yaml
 name: mi_skill
@@ -213,7 +280,7 @@ No hay que tocar Python. El sistema auto-descubre los YAML al arrancar.
 
 ```
 apiidee-agent/
-├── backend/                          # Servidor Django
+├── servidor/                          # Servidor Django
 │   ├── manage.py
 │   ├── requirements.txt
 │   ├── .env.example
@@ -328,7 +395,7 @@ El plugin se integra como cualquier otro plugin de API-IDEE:
   const chatAgent = new IDEE.plugin.ChatAgent({
     position: 'TR',
     collapsed: true,
-    backendUrl: 'http://localhost:8000/api',
+    servidorUrl: 'http://localhost:8000/api',
     tooltip: 'Asistente API-IDEE',
     placeholder: 'Pregunta sobre API-IDEE...',
   });

@@ -2,6 +2,7 @@
 Django settings for API-IDEE Agent project.
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -148,3 +149,25 @@ LLM_MODEL = os.getenv('LLM_MODEL', 'gemini-pro')
 # ---------------------------------------------------------------------------
 
 VECTORSTORE_DIR = BASE_DIR / 'vectorstore_data'
+
+# ---------------------------------------------------------------------------
+# Embeddings
+# ---------------------------------------------------------------------------
+
+EMBEDDINGS_PROVIDER = os.getenv('EMBEDDINGS_PROVIDER', '').lower()
+EMBEDDINGS_MODEL = os.getenv('EMBEDDINGS_MODEL', '')
+
+
+# ---------------------------------------------------------------------------
+# LLM Providers — loaded from providers.json
+# ---------------------------------------------------------------------------
+
+_PROVIDERS_PATH = os.getenv('PROVIDERS_CONFIG_PATH') or BASE_DIR / 'providers.json'
+if isinstance(_PROVIDERS_PATH, str):
+    _PROVIDERS_PATH = Path(_PROVIDERS_PATH)
+
+if _PROVIDERS_PATH.exists():
+    with open(_PROVIDERS_PATH) as f:
+        LLM_PROVIDERS = json.load(f)
+else:
+    LLM_PROVIDERS = []

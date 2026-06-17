@@ -6,6 +6,8 @@ from typing import Dict, List
 
 from django.conf import settings
 
+from .embeddings import get_embeddings
+
 logger = logging.getLogger(__name__)
 
 
@@ -51,9 +53,8 @@ def _load_faiss_store(store_path: Path):
     """Load a FAISS vector store from disk."""
     try:
         from langchain_community.vectorstores import FAISS
-        from langchain_openai import OpenAIEmbeddings
 
-        embeddings = OpenAIEmbeddings(api_key=settings.OPENAI_API_KEY)
+        embeddings = get_embeddings()
         return FAISS.load_local(
             str(store_path),
             embeddings,
