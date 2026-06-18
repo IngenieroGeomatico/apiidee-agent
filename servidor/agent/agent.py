@@ -44,19 +44,20 @@ class Agent:
                  model: Optional[str] = None,
                  api_key: Optional[str] = None):
         self.skill_registry = SkillRegistry()
+        self.provider = self._init_provider(provider_name, model, api_key)
+
+    def _init_provider(self, provider_name, model, api_key):
         if provider_name and model:
-            self.provider = get_provider(provider_name, model, api_key=api_key)
-        else:
-            from django.conf import settings
-            if settings.LLM_PROVIDERS:
-                first = settings.LLM_PROVIDERS[0]
-                self.provider = get_provider(
-                    provider_name or first["name"],
-                    model or first.get("default_model", ""),
-                    api_key=api_key,
-                )
-            else:
-                self.provider = get_llm_provider()
+            return get_provider(provider_name, model, api_key=api_key)
+        from django.conf import settings
+        if settings.LLM_PROVIDERS:
+            first = settings.LLM_PROVIDERS[0]
+            return get_provider(
+                provider_name or first["name"],
+                model or first.get("default_model", ""),
+                api_key=api_key,
+            )
+        return get_llm_provider()
 
     def run(self, user_message: str, history: list,
             map_state: Optional[dict] = None) -> AgentResponse:
@@ -71,38 +72,12 @@ class Agent:
         Returns:
             AgentResponse with either text content or tool_call instructions
         """
-        # 1. Retrieve RAG context
         rag_results = retrieve_context(query=user_message)
-
-        # 2. Build system prompt
         system_prompt = self._build_system_prompt(rag_results, map_state)
-
-        # 3. Build message list for LLM
-        llm_messages = [{"role": "system", "content": system_prompt}]
-        llm_messages.extend(history)
-
-        # 4. Get available tools from skills
+        llm_messages = [{"role": "system", "content": system_prompt}, *history]
         tools = get_langchain_tools()
-
-        # 5. Call LLM
         response = self.provider.chat(llm_messages, tools=tools if tools else None)
-
-        # 6. Build response
-        sources = [chunk["metadata"] for chunk in rag_results] if rag_results else []
-
-        if response.has_tool_calls:
-            return AgentResponse(
-                content=response.content or "Ejecutando acción en el mapa...",
-                response_type="tool_call",
-                tool_calls=response.tool_calls,
-                sources=sources,
-            )
-
-        return AgentResponse(
-            content=response.content,
-            response_type="text",
-            sources=sources,
-        )
+        return self._build_response(response, rag_results, is_tool_call=response.has_tool_calls)
 
     def process_tool_result(self, tool_name: str, tool_result: dict,
                             success: bool, history: list) -> AgentResponse:
@@ -118,7 +93,6 @@ class Agent:
         Returns:
             AgentResponse with the agent's interpretation of the tool result
         """
-        # Find last user message for RAG context
         last_user_content = ""
         for msg in reversed(history):
             if msg.get("role") == "user":
@@ -127,14 +101,19 @@ class Agent:
 
         rag_results = retrieve_context(query=last_user_content) if last_user_content else []
         system_prompt = self._build_system_prompt(rag_results)
-
-        llm_messages = [{"role": "system", "content": system_prompt}]
-        llm_messages.extend(history)
-
-        # Call LLM without tools to get final interpretation
+        llm_messages = [{"role": "system", "content": system_prompt}, *history]
         response = self.provider.chat(llm_messages)
-        sources = [chunk["metadata"] for chunk in rag_results] if rag_results else []
+        return self._build_response(response, rag_results)
 
+    def _build_response(self, response, rag_results, is_tool_call=False):
+        sources = [chunk["metadata"] for chunk in rag_results] if rag_results else []
+        if is_tool_call:
+            return AgentResponse(
+                content=response.content or "Ejecutando acción en el mapa...",
+                response_type="tool_call",
+                tool_calls=response.tool_calls,
+                sources=sources,
+            )
         return AgentResponse(
             content=response.content,
             response_type="text",

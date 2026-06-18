@@ -88,8 +88,28 @@ class ConversationViewSet(
     mixins.ListModelMixin,
     viewsets.GenericViewSet,
 ):
+    """ViewSet para gestionar conversaciones. Soporta crear, listar,
+    recuperar y eliminar conversaciones, así como enviar mensajes
+    y procesar resultados de herramientas a través del agente."""
+
     queryset = Conversation.objects.all()
     serializer_class = ConversationSerializer
+
+    def create(self, request, *args, **kwargs):
+        """Crea una nueva conversación."""
+        return super().create(request, *args, **kwargs)
+
+    def list(self, request, *args, **kwargs):
+        """Lista todas las conversaciones."""
+        return super().list(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        """Recupera una conversación por su ID."""
+        return super().retrieve(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        """Elimina una conversación."""
+        return super().destroy(request, *args, **kwargs)
 
     @action(detail=True, methods=['get'], url_path='messages')
     def messages(self, request, pk=None):
