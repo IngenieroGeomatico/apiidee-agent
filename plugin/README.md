@@ -9,6 +9,9 @@ An AI assistant plugin for the API-IDEE map viewer, providing Q&A capabilities a
 - Communicates with a Django-based AI backend for RAG (Retrieval-Augmented Generation).
 - Can answer questions about API-IDEE features, usage, and plugin development.
 - Pure JavaScript, no build step required.
+- **User API keys**: save multiple API keys with custom names in browser localStorage. Click the gear icon (⚙) to add, test, save, switch, or delete keys. Saved entries appear as selectable options in the provider dropdown, separated from server providers by a `─── Tus claves ───` divider.
+- **Server default mode**: use the server's configured LLM without any client-side API key.
+- **Test-before-save**: the Guardar button stays disabled until Probar validates the key against the provider.
 
 ## Usage
 
@@ -49,6 +52,45 @@ An AI assistant plugin for the API-IDEE map viewer, providing Q&A capabilities a
 | `tooltip`      | `string`| `Asistente API-IDEE`         | Tooltip text for the plugin button            |
 | `placeholder`  | `string`| `Pregunta sobre API-IDEE...` | Placeholder text for the chat input field     |
 | `welcomeMessage`| `string`| (default text)               | Initial welcome message in the chat           |
+
+## User API Keys (Custom Entries)
+
+API keys are managed entirely in the browser via `localStorage` under the key `chatagent_user_keys`. No key data is ever sent to the server except in-memory per HTTPS request.
+
+### Adding a key
+
+1. Click the **gear icon (⚙)** in the chat header to open the settings panel.
+2. Fill in:
+   - **Name** — a custom label (e.g. "Mi API de Groq")
+   - **Provider** — select one of the server-configured providers
+   - **API key** — paste your key (toggle visibility with the eye button)
+3. Click **Probar** — the plugin sends `POST /api/test-key/` with `{ provider, api_key }`. On success, the Guardar button enables.
+4. Click **Guardar** — the entry is saved to `localStorage` and appears in the provider bar dropdown.
+
+> Guardar is **disabled** until Probar succeeds. This ensures only valid keys are saved.
+
+### Selecting a key
+
+Saved entries appear in the **provider dropdown** (top bar) after a disabled separator `─── Tus claves ───`. Selecting an entry:
+- Uses the entry's `apiKey` for all subsequent chat and tool-result requests.
+- Loads the models available for the entry's underlying provider.
+
+### Deleting a key
+
+In the settings panel, click **×** on any saved entry. If that entry was active, the dropdown falls back to the first server provider.
+
+### Storage format
+
+```json
+[
+  {
+    "id": "key_1718100000000_a1b2c3",
+    "name": "Mi API de Groq",
+    "provider": "groq",
+    "apiKey": "gsk_..."
+  }
+]
+```
 
 ## Development
 
