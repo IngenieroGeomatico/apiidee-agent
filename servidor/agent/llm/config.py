@@ -25,18 +25,22 @@ def get_configured_providers() -> List[Dict]:
     return result
 
 
-def get_provider(provider_name: str, model: str) -> BaseLLMProvider:
+def get_provider(provider_name: str, model: str,
+                 api_key: Optional[str] = None) -> BaseLLMProvider:
     """
     Get a configured LLM provider by name and model.
 
     Looks up the provider in settings.LLM_PROVIDERS and creates
     an OpenAICompatibleProvider with the matching base_url and api_key.
+
+    If api_key is provided, it overrides the configured key (for
+    user-provided keys from the frontend).
     """
     for provider in settings.LLM_PROVIDERS:
         if provider["name"].lower() == provider_name.lower():
             return OpenAICompatibleProvider(
                 base_url=provider["base_url"],
-                api_key=provider["api_key"],
+                api_key=api_key or provider["api_key"],
                 model=model,
             )
 

@@ -21,15 +21,154 @@ Agente IA para el visualizador de mapas [API-IDEE](https://github.com/Desarrollo
                      └───────────────────────────┘
 ```
 
-### Conceptos clave
+## Conceptos clave (teoria)
 
-| Concepto | Que es | Donde vive |
-|----------|--------|------------|
-| **Agent** | El cerebro. Orquesta RAG, skills, tools y LLM para responder al usuario | `servidor/agent/agent.py` |
-| **Tool** | Una accion atomica que el agente puede invocar en el mapa (se ejecuta en el navegador) | `servidor/agent/tools/definitions/*.json` + `plugin/chatagent.js` |
-| **Skill** | Conocimiento de dominio: agrupa tools + prompt especializado que ensena al agente cuando y como usarlos | `servidor/agent/skills/definitions/*.yaml` |
-| **RAG** | Busqueda semantica sobre repositorios y webs indexadas para dar contexto al agente | `servidor/agent/rag/` + `servidor/vectorstore/` |
-| **Embeddings** | Modelo que convierte texto en vectores para busqueda semantica (local, OpenAI o Gemini) | `servidor/agent/rag/embeddings.py` |
+### Agent
+
+Un **agente** es un programa que percibe su entorno, razona sobre ello y ejecuta acciones para lograr un objetivo. A diferencia de un simple "LLM call", un agente:
+
+1. **Recibe entrada** — el mensaje del usuario y el estado actual del mapa
+2. **Busca contexto** — consulta RAG para obtener informacion relevante (codigo fuente, documentacion)
+3. **Razona** — construye un prompt con skills activos + contexto + estado y llama al LLM
+4. **Decide** — el LLM puede responder texto o solicitar la ejecucion de una tool
+5. **Itera** — si se ejecuto una tool, el agente procesa el resultado y genera una respuesta final
+
+El agente **no ejecuta las tools** directamente, solo decide cual invocar. La ejecucion ocurre en el navegador. Esto sigue el patron **"el agente piensa, el plugin actua"**.
+
+```
+Mensaje usuario
+     │
+     ▼
+┌──────────┐   ┌────────┐   ┌──────┐
+│ Buscar   │──▶│ LLM    │──▶│Text  │──▶ Respuesta
+│ contexto │   │+ tools │   │o tool│
+│ (RAG)    │   │        │   │_call │
+└──────────┘   └────────┘   └──┬───┘
+                               │ tool_call
+                               ▼
+                         ┌──────────┐   ┌────────┐
+                         │ Plugin   │──▶│ LLM    │──▶ Texto final
+                         │ ejecuta  │   │procesa │
+                         │ tool     │   │result. │
+                         └──────────┘   └────────┘
+```
+
+Ubicacion: `servidor/agent/agent.py`
+
+### Tool
+
+Una **tool** es una accion atomica que el agente puede invocar. Cada tool tiene:
+
+- **Nombre** — identificador unico (ej: `zoomTo`)
+- **Descripcion** — texto que el LLM lee para entender cuando usarla
+- **Parametros** — esquema JSON con los argumentos que necesita
+
+Las tools se definen en JSON en el servidor y se implementan en JavaScript en el plugin. El LLM nunca ejecuta la tool directamente; solo genera una solicitud de llamada (tool_call) con los argumentos adecuados. El plugin recibe la solicitud, ejecuta la tool sobre el mapa real, y devuelve el resultado al servidor.
+
+```
+LLM decide usar tool
+       │
+       ▼
+tool_call { name: "zoomTo", args: { lat: 40.4, lon: -3.7 } }
+       │
+       ▼
+Plugin ejecuta: map.setCenter({ x: -3.7, y: 40.4 })
+       │
+       ▼
+Devuelve { success: true }
+       │
+       ▼
+LLM procesa resultado y responde al usuario
+```
+
+Una tool es como una **función** que el agente puede "llamar" pero que ejecuta otro sistema. No hay logica en el servidor para la tool — solo la definicion de su interfaz.
+
+**Donde vive**: Definicion en `servidor/agent/tools/definitions/*.json`, implementacion en `plugin/chatagent.js` (CHATAGENT_TOOL_MAP).
+
+### Skill
+
+Un **skill** es conocimiento de dominio que agrupa:
+
+1. **Un conjunto de tools** relacionadas
+2. **Un prompt especializado** que le dice al LLM *como* y *cuando* usarlas
+
+Mientras que una tool solo dice "que hace", un skill dice "como usarla bien". Por ejemplo, el skill `navigation` incluye:
+
+```yaml
+tools: [getMapCenter, getCurrentZoom, zoomTo, setZoom]
+prompt: |
+  Cuando el usuario quiera navegar:
+  1. Usa getMapCenter() para saber donde esta
+  2. Usa zoomTo(lat, lon, zoom) para mover el mapa
+  Siempre confirma lo que hiciste.
+```
+
+Los skills se inyectan en el system prompt del LLM, por lo que actuan como **instrucciones contextuales** que mejoran la calidad de las respuestas sin necesidad de fine-tuning.
+
+A diferencia de las tools (que son puramente mecanicas), los skills codifican **buenas practicas** y **flujos de trabajo** especificos del dominio.
+
+**Donde vive**: `servidor/agent/skills/definitions/*.yaml`
+
+### Embedding
+
+Un **embedding** es una representacion numerica de texto en forma de vector (lista de numeros). La idea clave es:
+
+- Textos con significado similar tienen vectores **cercanos** (distancia pequena)
+- Textos con significado diferente tienen vectores **lejanos** (distancia grande)
+
+Esto permite busqueda semantica: en vez de buscar por palabras exactas (como `grep`), podemos buscar por **significado**. Por ejemplo, "como anyado una capa al mapa" y "anadir wms" generan vectores cercanos aunque no compartan palabras.
+
+En el proyecto, los embeddings se usan en el pipeline RAG:
+
+1. **Indexacion**: los documentos (codigo, documentacion) se trocean en chunks y cada chunk se convierte a vector con un modelo de embeddings. Los vectores se guardan en FAISS (indice de busqueda vectorial).
+2. **Consulta**: el mensaje del usuario se convierte al mismo tipo de vector. FAISS busca los chunks con vectores mas cercanos y los devuelve como contexto para el LLM.
+
+El proyecto soporta tres tipos de embeddings:
+
+| Tipo | Modelo por defecto | Requisito | Uso recomendado |
+|------|--------------------|-----------|-----------------|
+| Local (FastEmbed) | `BAAI/bge-m3` (multilingüe) | Ninguno (descarga ~80MB) | Offline, privacidad total |
+| OpenAI | `text-embedding-3-small` | API key de OpenAI | Alta calidad, ingles |
+| Gemini | `models/embedding-001` | API key de Google | Alta calidad, multilingue |
+
+El modelo por defecto es **local** con `BAAI/bge-m3`, un modelo multilingüe gratuito que funciona bien con espanol. El resultado de `get_embeddings()` se **cachea** para evitar recrear el modelo en cada peticion.
+
+**Donde vive**: `servidor/agent/rag/embeddings.py`
+
+### Resumen visual de las relaciones
+
+```
+SKILL (YAML)                 TOOL (JSON)                AGENT (Python)
+┌──────────────────┐       ┌──────────────────┐       ┌──────────────────┐
+│ navigation        │       │ zoomTo {         │       │ Agent.run()       │
+│ tools:            │──────▶│   lat, lon, zoom │       │  1. RAG context   │
+│   - zoomTo        │       │ }                │       │  2. Skills prompt │
+│   - setZoom       │       ├──────────────────┤       │  3. LLM call      │
+│   - getMapCenter  │       │ setZoom {        │       │  4. tool_call?    │
+│ prompt: |         │──────▶│   level          │       └──────────────────┘
+│   "Instrucciones  │       │ }                │              │
+│    para navegar"  │       ├──────────────────┤              ▼
+└──────────────────┘       │ getMapCenter {}   │      ┌──────────────────┐
+                            └──────────────────┘      │ PLUGIN (JS)      │
+                                                       │ CHATAGENT_TOOL_MAP│
+                                                       │   zoomTo: fn()    │
+                                                       │   setZoom: fn()   │
+                                                       └──────────────────┘
+
+EMBEDDINGS (modelo)          FAISS (indice)
+┌──────────────────┐       ┌──────────────────┐
+│ "texto" ──▶ [0.1, │       │  Chunk 1: vector A│
+│             0.3,  │──────▶│  Chunk 2: vector B│
+│             0.8]  │       │  Chunk 3: vector C│
+└──────────────────┘       └──────────────────┘
+                                  │
+                                  ▼
+                          ┌──────────────────┐
+                          │ retrieve_context  │  ← Consulta: embedding del mensaje
+                          │ Devuelve top-k    │
+                          │ chunks similares  │
+                          └──────────────────┘
+```
 
 ## Arquitectura: como se conectan Agent, Skills, Tools, Embeddings
 
@@ -60,9 +199,11 @@ Agente IA para el visualizador de mapas [API-IDEE](https://github.com/Desarrollo
           │  semantico)     │ │  OpenAI)   │ │
           │                 │ │            │ │
           │  FAISS stores   │ │            │ │
+          │  (cacheadas)    │ │            │ │
           │  ↑              │ │            │ │
           │  Embeddings     │ │            │ │
           │  (local/API)    │ │            │ │
+          │  (cache)        │ │            │ │
           └─────────────────┘ └────────────┘ │
                                              │
                          ┌───────────────────▼──────────┐
@@ -78,7 +219,7 @@ Agente IA para el visualizador de mapas [API-IDEE](https://github.com/Desarrollo
 
 2. **Tools** → acciones atomicas definidas en JSON (servidor) e implementadas en JS (plugin). El LLM decide cual invocar segun la peticion del usuario.
 
-3. **RAG (Embeddings + FAISS)** → los documentos se trocean en chunks, se convierten a vectores con un modelo de embeddings y se guardan en FAISS. En cada consulta, el mensaje del usuario se convierte al mismo tipo de vector y se buscan los chunks mas similares.
+3. **RAG (Embeddings + FAISS)** → los documentos se trocean en chunks, se convierten a vectores con un modelo de embeddings y se guardan en FAISS. En cada consulta, el mensaje del usuario se convierte al mismo tipo de vector y se buscan los chunks mas similares. Las stores FAISS y los modelos de embeddings se **cachean en memoria** para evitar recargarlos en cada peticion.
 
 4. **Agent** → orquesta todo: recibe el mensaje, pide contexto a RAG, inyecta los skills activos y el estado del mapa en el prompt, llama al LLM, y si el LLM devuelve un tool_call, lo reenvia al plugin para ejecutarlo.
 
@@ -86,11 +227,11 @@ Agente IA para el visualizador de mapas [API-IDEE](https://github.com/Desarrollo
 
 | Pieza | Configuracion | Proveedores |
 |-------|--------------|-------------|
-| **LLM** | `LLM_PROVIDER` + `LLM_MODEL` en `.env` | Gemini, OpenAI |
-| **Embeddings** | `EMBEDDINGS_PROVIDER` + `EMBEDDINGS_MODEL` en `.env` | Local (FastEmbed), OpenAI, Gemini |
+| **LLM** | `LLM_PROVIDER` + `LLM_MODEL` en `.env`, o API key propia desde el plugin | Gemini, OpenAI (y cualquier proveedor compatible con API OpenAI via `providers.json`) |
+| **Embeddings** | `EMBEDDINGS_PROVIDER` + `EMBEDDINGS_MODEL` en `.env` | Local (FastEmbed, default `BAAI/bge-m3`), OpenAI, Gemini |
 | **Tools** | JSON en `servidor/agent/tools/definitions/` | Auto-descubiertos al arrancar |
 | **Skills** | YAML en `servidor/agent/skills/definitions/` | Auto-descubiertos al arrancar |
-| **RAG** | `index_source` CLI + `VECTORSTORE_DIR` en `.env` | FAISS + embeddings |
+| **RAG** | `index_source` CLI + `VECTORSTORE_DIR` en `.env` | FAISS + embeddings (cacheados en memoria) |
 
 ## Requisitos
 
@@ -99,6 +240,7 @@ Agente IA para el visualizador de mapas [API-IDEE](https://github.com/Desarrollo
 - Una API key de un proveedor LLM:
   - [Google Gemini](https://aistudio.google.com/app/apikey) (gratuita)
   - [OpenAI](https://platform.openai.com/api-keys)
+  - Cualquier proveedor compatible con API OpenAI (Groq, Cerebras, OpenRouter, etc.)
 
 ## Instalacion
 
@@ -172,7 +314,42 @@ DEBUG=True
 
 # --- CORS ---
 ALLOWED_ORIGINS=http://localhost:8080,http://localhost:3000
+
+# --- Embeddings (opcional, por defecto local) ---
+EMBEDDINGS_PROVIDER=local
+EMBEDDINGS_MODEL=BAAI/bge-m3
 ```
+
+### API keys desde el plugin (claves de usuario)
+
+El usuario puede guardar sus propias API keys directamente desde el chat, con **nombre personalizado**. Las keys se guardan exclusivamente en el **navegador (localStorage)** y persisten entre sesiones. Nunca se almacenan en el servidor.
+
+#### Cómo funciona
+
+1. Haz clic en el icono de **engranaje (⚙)** en la cabecera del chat
+2. Se abre el panel de configuración con las claves guardadas y el formulario para añadir nuevas
+3. Para guardar una clave:
+   - Escribe un **nombre personalizado** (ej: "Mi API de Groq", "Producción", "Test")
+   - **Selecciona el proveedor** del desplegable (los disponibles en el servidor)
+   - Introduce tu **API key**
+   - Haz clic en **Probar** — el servidor verifica la key contra el proveedor (`GET {base_url}/models`)
+   - Si la key es válida, haz clic en **Guardar**
+4. Las claves guardadas aparecen listadas con el nombre, proveedor y key parcialmente oculta
+5. Para eliminar una clave, haz clic en **×** a la derecha
+
+> El botón **Guardar** solo se activa tras pulsar **Probar** y recibir validación correcta.
+
+#### Selección en la barra superior
+
+Las claves guardadas aparecen como opciones seleccionables en el desplegable de proveedores de la barra superior, separadas de los proveedores del servidor por una línea `─── Tus claves ───`. Cada entrada se muestra con un icono 🔑 y su **nombre personalizado**. Al seleccionar una:
+
+- Su `api_key` se envía automáticamente con cada mensaje y resultado de tool
+- El proveedor subyacente se usa para cargar los modelos disponibles
+- El campo `api_key` solo viaja en memoria durante la petición HTTPS — **no se almacena en la base de datos del servidor** ni en logs
+
+Puedes tener múltiples entradas para un mismo proveedor con distintas keys y nombres.
+
+Puedes usar cualquier proveedor compatible con la API de OpenAI (Groq, Cerebras, OpenRouter, etc.) que esté configurado en el servidor a través de `providers.json`.
 
 ## Indexar conocimiento (RAG)
 
@@ -194,9 +371,11 @@ python manage.py index_source https://componentes.idee.es/api-idee/doc/ --type w
 python manage.py index_source https://github.com/Desarrollos-IDEE/API-IDEE --type git --batch-size 50
 ```
 
-Los indices se guardan en `servidor/vectorstore_data/` (no se suben al repo).
+Los indices se guardan en `servidor/vectorstore_data/` (no se suben al repo). Una vez indexados, las stores FAISS se **cachean en memoria** para que las consultas sean rapidas sin recargar de disco.
 
 > **Nota**: `--batch-size` controla cuantos chunks se embeden a la vez. Por defecto 100. Reducirlo baja el consumo de RAM pero ralentiza el proceso.
+
+> **Nota**: Si reindexas una fuente, usa `clear_faiss_cache()` o reinicia el servidor para que los cambios surtan efecto.
 
 ## Anadir tools
 
@@ -249,7 +428,7 @@ No hay que tocar Python. El sistema auto-descubre los JSON al arrancar.
 
 ## Anadir skills
 
-Los skills ensenyan al agente cuando y como usar un grupo de tools. Son ficheros YAML.
+Los skills enseñan al agente cuando y como usar un grupo de tools. Son ficheros YAML.
 
 Crear un fichero en `servidor/agent/skills/definitions/`:
 
@@ -276,6 +455,20 @@ No hay que tocar Python. El sistema auto-descubre los YAML al arrancar.
 | `navigation` | getMapCenter, getCurrentZoom, getMapExtent, zoomTo, setZoom | Navegar por el mapa y buscar ubicaciones |
 | `layer_management` | listActiveLayers, addWMSLayer, removeLayer | Gestionar capas del visualizador |
 
+## Mejoras de rendimiento recientes
+
+### Cache de embeddings
+
+El modelo de embeddings se crea una sola vez y se reusa en todas las peticiones (singleton). Esto evita el overhead de cargar el modelo en cada llamada a RAG.
+
+### Cache de FAISS stores
+
+Los indices FAISS se cargan desde disco una unica vez y se mantienen en memoria. Las consultas posteriores son instantaneas sin acceso a disco. Si se reindexa una fuente, llama a `clear_faiss_cache()` o reinicia el servidor.
+
+### Modelo de embeddings multilingüe
+
+El modelo local por defecto es `BAAI/bge-m3`, que soporta espanol y otros idiomas, a diferencia del anterior `bge-small-en-v1.5` que solo funcionaba bien en ingles.
+
 ## Estructura del proyecto
 
 ```
@@ -296,12 +489,13 @@ apiidee-agent/
 │   │   ├── serializers.py            # DRF serializers
 │   │   ├── urls.py                   # Rutas API
 │   │   ├── llm/                      # Proveedores LLM
-│   │   │   ├── providers.py          # OpenAI, Gemini
+│   │   │   ├── providers.py          # OpenAI, Gemini, OpenAICompatible
 │   │   │   └── config.py             # Factory
 │   │   ├── rag/                      # Pipeline RAG
 │   │   │   ├── indexer.py            # BaseIndexer + GitRepoIndexer + WebIndexer
 │   │   │   ├── chunking.py           # Chunking por funciones/clases/headings
-│   │   │   └── retriever.py          # Query FAISS
+│   │   │   ├── embeddings.py         # Embeddings factory (cache singleton)
+│   │   │   └── retriever.py          # Query FAISS (stores cacheadas)
 │   │   ├── tools/                    # Definiciones de tools
 │   │   │   ├── registry.py           # Auto-descubre definitions/*.json
 │   │   │   └── definitions/          # <-- ANADIR TOOLS AQUI
@@ -338,6 +532,7 @@ apiidee-agent/
 | `GET` | `/api/conversations/{id}/messages/` | Listar mensajes |
 | `POST` | `/api/conversations/{id}/chat/` | Enviar mensaje (responde texto o tool_call) |
 | `POST` | `/api/conversations/{id}/tool-result/` | Enviar resultado de ejecucion de tool |
+| `POST` | `/api/test-key/` | Probar API key contra un proveedor (`provider` + `api_key`) |
 
 ### Ejemplo: enviar mensaje
 
@@ -379,6 +574,22 @@ Respuesta tool_call:
 }
 ```
 
+### Enviar mensaje con API key propia
+
+```json
+POST /api/conversations/{id}/chat/
+Content-Type: application/json
+
+{
+  "content": "Llevame a Madrid",
+  "provider": "groq",
+  "model": "llama-3.1-70b-versatile",
+  "api_key": "gsk_tu_api_key_aqui"
+}
+```
+
+El campo `api_key` es opcional. Si se omite, se usa la clave configurada en el servidor. Cuando el usuario ha guardado una API key para el proveedor seleccionado desde el plugin, el campo `api_key` se envia automaticamente con cada mensaje.
+
 ## Plugin API-IDEE
 
 El plugin se integra como cualquier otro plugin de API-IDEE:
@@ -395,7 +606,7 @@ El plugin se integra como cualquier otro plugin de API-IDEE:
   const chatAgent = new IDEE.plugin.ChatAgent({
     position: 'TR',
     collapsed: true,
-    servidorUrl: 'http://localhost:8000/api',
+    backendUrl: 'http://localhost:8000/api',
     tooltip: 'Asistente API-IDEE',
     placeholder: 'Pregunta sobre API-IDEE...',
   });
@@ -404,15 +615,20 @@ El plugin se integra como cualquier otro plugin de API-IDEE:
 </script>
 ```
 
+El plugin incluye un boton de configuracion (⚙) en la cabecera que permite al usuario:
+- Seleccionar proveedor y modelo
+- Introducir su propia API key
+
 ## Flujo de ejecucion
 
 ```
 1. Usuario escribe mensaje en el chat
 2. Plugin JS envia POST /api/conversations/{id}/chat/ con mensaje + estado del mapa
+   (y opcionalmente provider, model, api_key)
 3. Servidor Django:
-   a. Busca contexto relevante en FAISS (RAG)
+   a. Busca contexto relevante en FAISS (RAG) — stores cacheadas en memoria
    b. Construye system prompt = base + skills + contexto + estado del mapa
-   c. Llama al LLM con tools disponibles
+   c. Llama al LLM con tools disponibles (usando API key del usuario si se proporciono)
    d. Si el LLM decide usar un tool → responde type="tool_call"
    e. Si no → responde type="text"
 4. Si tool_call:

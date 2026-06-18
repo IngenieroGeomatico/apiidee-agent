@@ -142,11 +142,4 @@ class SkillRegistry:
                 parts.append(f"### Skill: {skill.name}\n{skill.system_prompt_addition}")
         return "\n\n".join(parts)
 
-    @classmethod
-    def get_tool_names(cls) -> List[str]:
-        """Get union of all tool names from all skills."""
-        cls._load_definitions()
-        names = set()
-        for skill in cls._skills:
-            names.update(skill.tools)
-        return list(names)
+
