@@ -100,6 +100,8 @@ function chatagentEscapeHtml(unsafe) {
    Plugin class
    ========================================================================= */
 
+var CHATAGENT_STORAGE_KEY = 'chatagent_user_keys';
+
 class ChatAgent {
   constructor(options) {
     this.name = 'ChatAgent';
@@ -121,8 +123,14 @@ class ChatAgent {
     this.inputElement = null;
     this.loadingEl = null;
     this.providers = [];
+
+    // Selected provider/model from the bar
     this.selectedProvider = null;
     this.selectedModel = null;
+
+    // User-saved entries: [{ id, name, provider, apiKey }]
+    this.userEntries = [];
+    this._loadUserEntries();
   }
 
   getHelp() {
@@ -136,11 +144,44 @@ class ChatAgent {
     };
   }
 
+  /* ------------------------------------------------------------------
+     User entries persistence (localStorage)
+     ------------------------------------------------------------------ */
+
+  _loadUserEntries() {
+    try {
+      var raw = localStorage.getItem(CHATAGENT_STORAGE_KEY);
+      if (raw) {
+        this.userEntries = JSON.parse(raw);
+      }
+    } catch (e) {
+      this.userEntries = [];
+    }
+    if (!Array.isArray(this.userEntries)) {
+      this.userEntries = [];
+    }
+  }
+
+  _saveUserEntries() {
+    try {
+      localStorage.setItem(CHATAGENT_STORAGE_KEY, JSON.stringify(this.userEntries));
+    } catch (e) {
+      console.error('Error saving entries to localStorage:', e);
+    }
+  }
+
+  _findEntryById(id) {
+    return this.userEntries.find(function(e) { return e.id === id; }) || null;
+  }
+
+  /* ------------------------------------------------------------------
+     Plugin lifecycle
+     ------------------------------------------------------------------ */
+
   addTo(map) {
     var self = this;
     this.map_ = map;
 
-    // 1. Create IDEE.ui.Panel
     var positionMap = {
       'TL': IDEE.ui.position.TL,
       'TR': IDEE.ui.position.TR,
@@ -160,12 +201,37 @@ class ChatAgent {
     var htmlPanel = ''
       + '<div aria-label="asistente IA" role="menuitem" id="div-contenedor-chatagent" class="m-control m-container m-chatagent-container">'
       +   '<header role="heading" tabindex="0" id="m-chatagent-title" class="m-chatagent-header">'
-      +     'Asistente API-IDEE'
+      +     '<span class="chatagent-header-title">Asistente API-IDEE</span>'
+      +     '<button id="chatagent-settings-toggle" class="chatagent-settings-toggle" title="Configuración">&#9881;</button>'
       +   '</header>'
       +   '<section id="m-chatagent-body" class="m-chatagent-body">'
       +     '<div class="chatagent-provider-bar" id="chatagent-provider-bar">'
       +       '<select id="chatagent-provider-select" class="chatagent-select" title="Proveedor IA"></select>'
       +       '<select id="chatagent-model-select" class="chatagent-select" title="Modelo"></select>'
+      +     '</div>'
+      +     '<div id="chatagent-settings-panel" class="chatagent-settings-panel">'
+      +       '<div id="chatagent-stored-keys" class="chatagent-stored-keys"></div>'
+      +       '<div class="chatagent-settings-divider"></div>'
+      +       '<div class="chatagent-settings-field">'
+      +         '<label for="chatagent-key-name">Nombre</label>'
+      +         '<input type="text" id="chatagent-key-name" class="chatagent-input" placeholder="Mi API de Groq">'
+      +       '</div>'
+      +       '<div class="chatagent-settings-field">'
+      +         '<label for="chatagent-settings-provider">Proveedor</label>'
+      +         '<select id="chatagent-settings-provider" class="chatagent-select"></select>'
+      +       '</div>'
+      +       '<div class="chatagent-settings-field">'
+      +         '<label for="chatagent-api-key">API Key</label>'
+      +         '<div class="chatagent-api-key-wrapper">'
+      +           '<input type="password" id="chatagent-api-key" class="chatagent-input chatagent-api-key-input" placeholder="sk-..." autocomplete="off">'
+      +           '<button id="chatagent-api-key-toggle" class="chatagent-api-key-toggle" title="Mostrar/ocultar API key">&#128065;</button>'
+      +         '</div>'
+      +         '<div id="chatagent-test-result" class="chatagent-test-result"></div>'
+      +       '</div>'
+      +       '<div class="chatagent-settings-actions">'
+      +         '<button id="chatagent-connection-test" class="chatagent-btn-test">Probar</button>'
+      +         '<button id="chatagent-settings-save" class="chatagent-settings-save" disabled>Guardar</button>'
+      +       '</div>'
       +     '</div>'
       +     '<div id="chatagent-messages" class="chatagent-messages"></div>'
       +     '<div class="chatagent-loading" id="chatagent-loading">'
@@ -178,7 +244,6 @@ class ChatAgent {
       +   '</section>'
       + '</div>';
 
-    // 3. Create IDEE.Control wrapping IDEE.impl.Control
     this.control_ = new IDEE.Control(new IDEE.impl.Control(), 'chatAgentControl');
 
     this.control_.createView = function() {
@@ -186,26 +251,21 @@ class ChatAgent {
       return container;
     };
 
-    // 4. Add control to panel, panel to map
     this.panel_.addControls(this.control_);
     map.addPanels(this.panel_);
 
-    // 5. Inject HTML into the panel
     var panelControls = document.querySelector('.g-chatagent .m-panel-controls');
     if (panelControls) {
       panelControls.innerHTML = htmlPanel;
     }
 
-    // 6. Append control element inside content area
     var contentsEl = document.querySelector('#m-chatagent-body');
     if (contentsEl) {
       contentsEl.appendChild(this.control_.getElement());
     }
 
-    // 7. Make panel draggable
     IDEE.utils.draggabillyPlugin(this.panel_, '#m-chatagent-title');
 
-    // 8. Wire up activate/deactivate
     this.control_.activate = function() {
       self._onActivate();
     };
@@ -214,7 +274,6 @@ class ChatAgent {
       self._onDeactivate();
     };
 
-    // 9. Activate immediately
     this.control_.activate();
   }
 
@@ -229,6 +288,10 @@ class ChatAgent {
     var sendBtn = document.querySelector('#chatagent-send');
     var providerSelect = document.querySelector('#chatagent-provider-select');
     var modelSelect = document.querySelector('#chatagent-model-select');
+    var settingsToggle = document.querySelector('#chatagent-settings-toggle');
+    var connTest = document.querySelector('#chatagent-connection-test');
+    var settingsSave = document.querySelector('#chatagent-settings-save');
+    var apiKeyToggle = document.querySelector('#chatagent-api-key-toggle');
 
     if (!this.messagesContainer || !this.inputElement || !sendBtn) {
       return;
@@ -236,11 +299,9 @@ class ChatAgent {
 
     var self = this;
 
-    // Disable send until providers are loaded
     sendBtn.disabled = true;
     this.inputElement.disabled = true;
 
-    // Event listeners
     this._onSendClick = function() { self._sendMessage(); };
     this._onInputKeydown = function(e) {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -257,16 +318,46 @@ class ChatAgent {
     this.inputElement.addEventListener('keydown', this._onInputKeydown);
     this.inputElement.addEventListener('input', this._onInputChange);
 
-    // Provider/model selectors
+    // Provider select in bar
     if (providerSelect) {
       providerSelect.addEventListener('change', function() {
-        self.selectedProvider = providerSelect.value;
-        self._updateModelSelect(self.selectedProvider);
+        self._onProviderChange(providerSelect.value);
       });
     }
     if (modelSelect) {
       modelSelect.addEventListener('change', function() {
         self.selectedModel = modelSelect.value;
+      });
+    }
+
+    // Settings toggle
+    if (settingsToggle) {
+      settingsToggle.addEventListener('click', function() {
+        self._toggleSettings();
+      });
+    }
+
+    // Test connection
+    if (connTest) {
+      connTest.addEventListener('click', function() {
+        self._testKey();
+      });
+    }
+
+    // Save key
+    if (settingsSave) {
+      settingsSave.addEventListener('click', function() {
+        self._saveKey();
+      });
+    }
+
+    // API key visibility toggle
+    if (apiKeyToggle) {
+      apiKeyToggle.addEventListener('click', function() {
+        var input = document.querySelector('#chatagent-api-key');
+        if (input) {
+          input.type = input.type === 'password' ? 'text' : 'password';
+        }
       });
     }
 
@@ -312,7 +403,30 @@ class ChatAgent {
   }
 
   /* ------------------------------------------------------------------
-     Provider / Model selection
+     Provider selection
+     ------------------------------------------------------------------ */
+
+  _onProviderChange(value) {
+    if (value && value.indexOf('__entry__') === 0) {
+      // User entry selected
+      var entryId = value.replace('__entry__', '');
+      var entry = this._findEntryById(entryId);
+      if (entry) {
+        this._activeEntryId = entryId;
+        this.selectedProvider = entry.provider;
+        this._updateModelSelect(entry.provider);
+        // Trigger settings sync
+        return;
+      }
+    }
+    // Server provider selected
+    this._activeEntryId = null;
+    this.selectedProvider = value;
+    this._updateModelSelect(value);
+  }
+
+  /* ------------------------------------------------------------------
+     Provider / Model fetching
      ------------------------------------------------------------------ */
 
   async _fetchProviders() {
@@ -329,20 +443,54 @@ class ChatAgent {
   _populateSelectors() {
     var providerSelect = document.querySelector('#chatagent-provider-select');
     var modelSelect = document.querySelector('#chatagent-model-select');
+    var settingsProv = document.querySelector('#chatagent-settings-provider');
     if (!providerSelect || !modelSelect || !this.providers.length) return;
+    var self = this;
 
     providerSelect.innerHTML = '';
-    this.providers.forEach(function(p, idx) {
+    if (settingsProv) settingsProv.innerHTML = '';
+
+    // Server providers
+    this.providers.forEach(function(p) {
       var opt = document.createElement('option');
       opt.value = p.name;
       opt.textContent = p.name;
       providerSelect.appendChild(opt);
+      if (settingsProv) {
+        var opt2 = document.createElement('option');
+        opt2.value = p.name;
+        opt2.textContent = p.name;
+        settingsProv.appendChild(opt2);
+      }
     });
 
-    // Select first provider and populate its models
-    this.selectedProvider = this.providers[0].name;
-    providerSelect.value = this.selectedProvider;
-    this._updateModelSelect(this.selectedProvider);
+    // User entries
+    if (this.userEntries.length > 0) {
+      var sep = document.createElement('option');
+      sep.disabled = true;
+      sep.textContent = '─── Tus claves ───';
+      providerSelect.appendChild(sep);
+
+      this.userEntries.forEach(function(e) {
+        var opt = document.createElement('option');
+        opt.value = '__entry__' + e.id;
+        opt.textContent = '\uD83D\uDD11 ' + e.name;
+        providerSelect.appendChild(opt);
+      });
+    }
+
+    // Restore selection
+    if (this._activeEntryId) {
+      providerSelect.value = '__entry__' + this._activeEntryId;
+    } else if (this.selectedProvider) {
+      providerSelect.value = this.selectedProvider;
+    } else {
+      this.selectedProvider = this.providers[0].name;
+      providerSelect.value = this.selectedProvider;
+    }
+
+    if (settingsProv) settingsProv.value = this.selectedProvider;
+    this._updateModelSelect(this.selectedProvider || this.providers[0].name);
   }
 
   _updateModelSelect(providerName) {
@@ -360,7 +508,6 @@ class ChatAgent {
       modelSelect.appendChild(opt);
     });
 
-    // Select default model or first available
     var defaultModel = provider.default_model;
     if (defaultModel && provider.models.some(function(m) { return m.id === defaultModel; })) {
       modelSelect.value = defaultModel;
@@ -368,9 +515,238 @@ class ChatAgent {
     this.selectedModel = modelSelect.value;
   }
 
+  _refreshProviderBar() {
+    var providerSelect = document.querySelector('#chatagent-provider-select');
+    var settingsProv = document.querySelector('#chatagent-settings-provider');
+    if (!providerSelect) return;
+    var self = this;
+
+    providerSelect.innerHTML = '';
+    if (settingsProv) settingsProv.innerHTML = '';
+
+    // Server providers
+    this.providers.forEach(function(p) {
+      var opt = document.createElement('option');
+      opt.value = p.name;
+      opt.textContent = p.name;
+      providerSelect.appendChild(opt);
+      if (settingsProv) {
+        var opt2 = document.createElement('option');
+        opt2.value = p.name;
+        opt2.textContent = p.name;
+        settingsProv.appendChild(opt2);
+      }
+    });
+
+    // User entries
+    if (this.userEntries.length > 0) {
+      var sep = document.createElement('option');
+      sep.disabled = true;
+      sep.textContent = '─── Tus claves ───';
+      providerSelect.appendChild(sep);
+
+      this.userEntries.forEach(function(e) {
+        var opt = document.createElement('option');
+        opt.value = '__entry__' + e.id;
+        opt.textContent = '\uD83D\uDD11 ' + e.name;
+        providerSelect.appendChild(opt);
+      });
+    }
+
+    // Restore selection
+    if (this._activeEntryId) {
+      providerSelect.value = '__entry__' + this._activeEntryId;
+    } else if (this.selectedProvider) {
+      providerSelect.value = this.selectedProvider;
+    }
+
+    if (settingsProv && this.selectedProvider) {
+      settingsProv.value = this.selectedProvider;
+    }
+  }
+
+  /* ------------------------------------------------------------------
+     Settings panel
+     ------------------------------------------------------------------ */
+
+  _toggleSettings() {
+    var panel = document.querySelector('#chatagent-settings-panel');
+    if (!panel) return;
+    var isOpen = panel.classList.toggle('open');
+    if (isOpen) {
+      this._renderStoredKeys();
+      this._clearTestResult();
+      var settingsProv = document.querySelector('#chatagent-settings-provider');
+      if (settingsProv && this.selectedProvider) {
+        settingsProv.value = this.selectedProvider;
+      }
+    }
+  }
+
+  _clearTestResult() {
+    var el = document.querySelector('#chatagent-test-result');
+    if (el) {
+      el.innerHTML = '';
+      el.className = 'chatagent-test-result';
+    }
+    var saveBtn = document.querySelector('#chatagent-settings-save');
+    if (saveBtn) saveBtn.disabled = true;
+  }
+
+  _showTestResult(ok, msg) {
+    var el = document.querySelector('#chatagent-test-result');
+    if (!el) return;
+    el.innerHTML = msg;
+    el.className = 'chatagent-test-result ' + (ok ? 'success' : 'error');
+
+    var saveBtn = document.querySelector('#chatagent-settings-save');
+    if (saveBtn) saveBtn.disabled = !ok;
+
+    if (ok) {
+      var nameInput = document.querySelector('#chatagent-key-name');
+      nameInput && nameInput.focus();
+    }
+  }
+
+  _renderStoredKeys() {
+    var container = document.querySelector('#chatagent-stored-keys');
+    if (!container) return;
+
+    if (this.userEntries.length === 0) {
+      container.innerHTML = '<div class="chatagent-stored-empty">No hay claves guardadas</div>';
+      return;
+    }
+
+    var self = this;
+    var html = '<div class="chatagent-stored-header">Tus claves</div>';
+    this.userEntries.forEach(function(e) {
+      var key = e.apiKey || '';
+      var masked = key.length > 8 ? key.slice(0, 4) + '••••' + key.slice(-4) : '••••••••';
+      var isActive = self._activeEntryId === e.id;
+      html += '<div class="chatagent-stored-item' + (isActive ? ' active' : '') + '">'
+        +   '<span class="chatagent-stored-item-name">' + chatagentEscapeHtml(e.name) + '</span>'
+        +   '<span class="chatagent-stored-item-provider">' + chatagentEscapeHtml(e.provider) + '</span>'
+        +   '<span class="chatagent-stored-item-key">' + chatagentEscapeHtml(masked) + '</span>'
+        +   '<button class="chatagent-stored-item-del" data-entry-id="' + e.id + '" title="Eliminar">×</button>'
+        + '</div>';
+    });
+    container.innerHTML = html;
+
+    container.querySelectorAll('.chatagent-stored-item-del').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var id = btn.getAttribute('data-entry-id');
+        self._deleteEntry(id);
+      });
+    });
+  }
+
+  async _testKey() {
+    var provSelect = document.querySelector('#chatagent-settings-provider');
+    var apiKeyInput = document.querySelector('#chatagent-api-key');
+
+    var provider = provSelect ? provSelect.value : '';
+    var apiKey = apiKeyInput ? apiKeyInput.value.trim() : '';
+
+    if (!provider) {
+      this._showTestResult(false, 'Selecciona un proveedor');
+      return;
+    }
+    if (!apiKey) {
+      this._showTestResult(false, 'Introduce la API key');
+      apiKeyInput && apiKeyInput.focus();
+      return;
+    }
+
+    this._showTestResult(false, 'Probando conexión...');
+
+    try {
+      var res = await fetch(this.options.backendUrl + '/test-key/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: provider, api_key: apiKey }),
+      });
+      var data = await res.json();
+
+      if (data.valid) {
+        this._testedProvider = provider;
+        this._testedApiKey = apiKey;
+        this._showTestResult(true, '&#9989; Válida');
+      } else {
+        this._showTestResult(false, '&#10060; ' + (data.error || 'Error desconocido'));
+      }
+    } catch (error) {
+      this._showTestResult(false, '&#10060; Error de conexión: ' + error.message);
+    }
+  }
+
+  _saveKey() {
+    var nameInput = document.querySelector('#chatagent-key-name');
+    var provSelect = document.querySelector('#chatagent-settings-provider');
+    var apiKeyInput = document.querySelector('#chatagent-api-key');
+
+    var name = nameInput ? nameInput.value.trim() : '';
+    var provider = provSelect ? provSelect.value : '';
+    var apiKey = apiKeyInput ? apiKeyInput.value.trim() : '';
+
+    if (!name) { nameInput && nameInput.focus(); return; }
+    if (!provider) { provSelect && provSelect.focus(); return; }
+    if (!apiKey) { apiKeyInput && apiKeyInput.focus(); return; }
+
+    var newEntry = {
+      id: 'key_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      name: name,
+      provider: provider,
+      apiKey: apiKey,
+    };
+    this.userEntries.push(newEntry);
+    this._saveUserEntries();
+
+    // Select the new entry
+    this._activeEntryId = newEntry.id;
+    this.selectedProvider = provider;
+    this._refreshProviderBar();
+    this._updateModelSelect(provider);
+    this._renderStoredKeys();
+
+    // Clear form
+    if (nameInput) nameInput.value = '';
+    if (apiKeyInput) apiKeyInput.value = '';
+    this._clearTestResult();
+  }
+
+  _deleteEntry(id) {
+    if (!id) return;
+    var entry = this._findEntryById(id);
+    var label = entry ? entry.name : 'esta clave';
+    if (!confirm('¿Eliminar "' + label + '"?')) return;
+
+    this.userEntries = this.userEntries.filter(function(e) { return e.id !== id; });
+    this._saveUserEntries();
+
+    if (this._activeEntryId === id) {
+      this._activeEntryId = null;
+      // Fall back to first server provider
+      if (this.providers.length > 0) {
+        this.selectedProvider = this.providers[0].name;
+      }
+    }
+
+    this._refreshProviderBar();
+    if (this.selectedProvider) this._updateModelSelect(this.selectedProvider);
+    this._renderStoredKeys();
+  }
+
   /* ------------------------------------------------------------------
      Chat logic
      ------------------------------------------------------------------ */
+
+  _getEffectiveApiKey() {
+    if (this._activeEntryId) {
+      var entry = this._findEntryById(this._activeEntryId);
+      if (entry) return entry.apiKey || null;
+    }
+    return null;
+  }
 
   _getMapState() {
     if (!this.map_) return null;
@@ -424,6 +800,9 @@ class ChatAgent {
       if (this.selectedProvider) body.provider = this.selectedProvider;
       if (this.selectedModel) body.model = this.selectedModel;
 
+      var apiKey = this._getEffectiveApiKey();
+      if (apiKey) body.api_key = apiKey;
+
       var res = await fetch(
         this.options.backendUrl + '/conversations/' + this.conversationId + '/chat/',
         {
@@ -468,6 +847,9 @@ class ChatAgent {
         };
         if (this.selectedProvider) body.provider = this.selectedProvider;
         if (this.selectedModel) body.model = this.selectedModel;
+
+        var apiKey = this._getEffectiveApiKey();
+        if (apiKey) body.api_key = apiKey;
 
         var res = await fetch(
           this.options.backendUrl + '/conversations/' + this.conversationId + '/tool-result/',

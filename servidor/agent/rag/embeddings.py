@@ -4,6 +4,8 @@ Configure via EMBEDDINGS_PROVIDER in .env:
   - "openai"  → OpenAIEmbeddings (requires OPENAI_API_KEY)
   - "gemini"  → GoogleGenerativeAIEmbeddings (requires GOOGLE_API_KEY)
   - "local"   → FastEmbedEmbeddings (free, offline, ~80MB model download)
+
+Uses a singleton cache so the embedding model is only created once.
 """
 
 import logging
@@ -12,26 +14,36 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
+_embeddings_cache = {}
+
 
 def get_embeddings():
     provider = getattr(settings, 'EMBEDDINGS_PROVIDER', '').lower()
     model = getattr(settings, 'EMBEDDINGS_MODEL', '')
 
+    cache_key = f"{provider}:{model}" if provider else model
+
+    if cache_key in _embeddings_cache:
+        return _embeddings_cache[cache_key]
+
     if provider == 'openai':
-        return _openai_embeddings(model)
-    if provider == 'gemini':
-        return _gemini_embeddings(model)
-    if provider == 'local':
-        return _local_embeddings(model)
+        instance = _openai_embeddings(model)
+    elif provider == 'gemini':
+        instance = _gemini_embeddings(model)
+    elif provider == 'local':
+        instance = _local_embeddings(model)
+    else:
+        # Auto-detect fallback
+        if settings.OPENAI_API_KEY:
+            instance = _openai_embeddings(model)
+        elif settings.GOOGLE_API_KEY:
+            instance = _gemini_embeddings(model)
+        else:
+            logger.info("No API keys found, falling back to local embeddings")
+            instance = _local_embeddings(model)
 
-    # Auto-detect fallback
-    if settings.OPENAI_API_KEY:
-        return _openai_embeddings(model)
-    if settings.GOOGLE_API_KEY:
-        return _gemini_embeddings(model)
-
-    logger.info("No API keys found, falling back to local embeddings")
-    return _local_embeddings(model)
+    _embeddings_cache[cache_key] = instance
+    return instance
 
 
 def _openai_embeddings(model: str):
@@ -54,5 +66,5 @@ def _gemini_embeddings(model: str):
 
 def _local_embeddings(model: str):
     from langchain_community.embeddings import FastEmbedEmbeddings
-    logger.info("Using local embeddings (model=%s)", model or "BAAI/bge-small-en-v1.5")
-    return FastEmbedEmbeddings(model_name=model or "BAAI/bge-small-en-v1.5")
+    logger.info("Using local embeddings (model=%s)", model or "BAAI/bge-m3")
+    return FastEmbedEmbeddings(model_name=model or "BAAI/bge-m3")
