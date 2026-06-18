@@ -18,6 +18,10 @@ _embeddings_cache = {}
 
 
 def get_embeddings():
+    """Devuelve el proveedor de embeddings configurado (OpenAI, Gemini o local).
+
+    Utiliza un caché singleton para crear el modelo una sola vez.
+    """
     provider = getattr(settings, 'EMBEDDINGS_PROVIDER', '').lower()
     model = getattr(settings, 'EMBEDDINGS_MODEL', '')
 
@@ -47,6 +51,7 @@ def get_embeddings():
 
 
 def _openai_embeddings(model: str):
+    """Crea una instancia de OpenAIEmbeddings con la clave API y modelo configurados."""
     from langchain_openai import OpenAIEmbeddings
     logger.info("Using OpenAI embeddings (model=%s)", model or "text-embedding-3-small")
     kwargs = {"api_key": settings.OPENAI_API_KEY}
@@ -56,6 +61,7 @@ def _openai_embeddings(model: str):
 
 
 def _gemini_embeddings(model: str):
+    """Crea una instancia de GoogleGenerativeAIEmbeddings con la clave API y modelo configurados."""
     from langchain_google_genai import GoogleGenerativeAIEmbeddings
     logger.info("Using Gemini embeddings (model=%s)", model or "models/embedding-001")
     return GoogleGenerativeAIEmbeddings(
@@ -65,6 +71,7 @@ def _gemini_embeddings(model: str):
 
 
 def _local_embeddings(model: str):
+    """Crea una instancia de FastEmbedEmbeddings usando un modelo local gratuito."""
     from langchain_community.embeddings import FastEmbedEmbeddings
     logger.info("Using local embeddings (model=%s)", model or "BAAI/bge-m3")
     return FastEmbedEmbeddings(model_name=model or "BAAI/bge-m3")
