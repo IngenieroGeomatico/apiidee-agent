@@ -307,6 +307,13 @@ class ChatAgent {
       + '</div>';
 
     this.control_ = new IDEE.Control(new IDEE.impl.Control(), 'chatAgentControl');
+
+    this.control_.createView = function() {
+      var container = document.createElement('div');
+      container.style.display = 'none';
+      return container;
+    };
+
     this.panel_.addControls(this.control_);
     map.addPanels(this.panel_);
 
