@@ -13,13 +13,22 @@
    ========================================================================= */
 
 var CHATAGENT_TOOL_MAP = {
+  /** Devuelve el centro actual del mapa.
+    @param {IDEE.Map} map Mapa activo.
+    @returns {{lat: number, lon: number, srs: string}} Objeto con latitud, longitud y SRS. */
   getMapCenter: function(map) {
     var center = map.getCenter();
     return { lat: center.y, lon: center.x, srs: map.getProjection().code };
   },
+  /** Devuelve el nivel de zoom actual del mapa.
+    @param {IDEE.Map} map Mapa activo.
+    @returns {{level: number}} Nivel de zoom. */
   getCurrentZoom: function(map) {
     return { level: map.getZoom() };
   },
+  /** Lista las capas activas del mapa con su nombre, tipo, visibilidad y leyenda.
+    @param {IDEE.Map} map Mapa activo.
+    @returns {Array<{name: string, type: string, visible: boolean, legend: string}>} Lista de capas. */
   listActiveLayers: function(map) {
     var layers = map.getLayers();
     return layers.map(function(layer) {
@@ -31,6 +40,9 @@ var CHATAGENT_TOOL_MAP = {
       };
     });
   },
+  /** Devuelve la extensión geográfica actual del mapa.
+    @param {IDEE.Map} map Mapa activo.
+    @returns {{minX: number, minY: number, maxX: number, maxY: number, srs: string}} Extensión del mapa. */
   getMapExtent: function(map) {
     var bbox = map.getBbox();
     return {
@@ -41,6 +53,10 @@ var CHATAGENT_TOOL_MAP = {
       srs: map.getProjection().code,
     };
   },
+  /** Añade una capa WMS al mapa.
+    @param {IDEE.Map} map Mapa activo.
+    @param {{url: string, name: string, legend?: string, transparent?: boolean}} args Parámetros de la capa.
+    @returns {{success: boolean, name: string}} Resultado de la operación. */
   addWMSLayer: function(map, args) {
     var layer = new IDEE.layer.WMS({
       url: args.url,
@@ -52,6 +68,10 @@ var CHATAGENT_TOOL_MAP = {
     map.addLayers([layer]);
     return { success: true, name: args.name };
   },
+  /** Centra el mapa en las coordenadas dadas con zoom opcional.
+    @param {IDEE.Map} map Mapa activo.
+    @param {{lon: number, lat: number, zoom?: number}} args Coordenadas y zoom.
+    @returns {{success: boolean}} Resultado. */
   zoomTo: function(map, args) {
     map.setCenter({ x: args.lon, y: args.lat });
     if (args.zoom !== undefined) {
@@ -59,6 +79,10 @@ var CHATAGENT_TOOL_MAP = {
     }
     return { success: true };
   },
+  /** Elimina una capa del mapa por su nombre.
+    @param {IDEE.Map} map Mapa activo.
+    @param {{name: string}} args Nombre de la capa a eliminar.
+    @returns {{success: boolean, name?: string, error?: string}} Resultado. */
   removeLayer: function(map, args) {
     var layers = map.getLayers();
     var target = layers.find(function(l) { return l.name === args.name; });
@@ -68,12 +92,21 @@ var CHATAGENT_TOOL_MAP = {
     }
     return { success: false, error: 'Layer not found: ' + args.name };
   },
+  /** Establece el nivel de zoom del mapa.
+    @param {IDEE.Map} map Mapa activo.
+    @param {{level: number}} args Nivel de zoom.
+    @returns {{success: boolean, level: number}} Resultado. */
   setZoom: function(map, args) {
     map.setZoom(args.level);
     return { success: true, level: args.level };
   },
 };
 
+/** Ejecuta una herramienta del mapa por su nombre.
+    @param {IDEE.Map} map Mapa activo.
+    @param {string} toolName Nombre de la herramienta.
+    @param {Object} [args] Argumentos opcionales.
+    @returns {{success: boolean, error?: string, ...*}} Resultado de la ejecución. */
 function chatagentExecuteTool(map, toolName, args) {
   var executor = CHATAGENT_TOOL_MAP[toolName];
   if (!executor) {
@@ -87,6 +120,9 @@ function chatagentExecuteTool(map, toolName, args) {
   }
 }
 
+/** Escapa caracteres HTML en una cadena para prevenir XSS.
+    @param {string} unsafe Cadena sin escapar.
+    @returns {string} Cadena escapada. */
 function chatagentEscapeHtml(unsafe) {
   return unsafe
     .replace(/&/g, '&amp;')
@@ -102,7 +138,9 @@ function chatagentEscapeHtml(unsafe) {
 
 var CHATAGENT_STORAGE_KEY = 'chatagent_user_keys';
 
+/** Plugin de API-IDEE que integra un asistente IA conversacional. */
 class ChatAgent {
+  /** @param {Object} options Opciones de configuracion (backendUrl, position, etc.). */
   constructor(options) {
     this.name = 'ChatAgent';
     this.options = options || {};
@@ -119,10 +157,25 @@ class ChatAgent {
     this.panel_ = null;
     this.control_ = null;
     this.conversationId = null;
+    this.providers = [];
+
+    // DOM refs (cached in _onActivate)
     this.messagesContainer = null;
     this.inputElement = null;
     this.loadingEl = null;
-    this.providers = [];
+    this.sendBtn = null;
+    this.providerSelect = null;
+    this.modelSelect = null;
+    this.settingsToggle = null;
+    this.settingsPanel = null;
+    this.settingsProv = null;
+    this.settingsSave = null;
+    this.connTest = null;
+    this.apiKeyToggle = null;
+    this.apiKeyInput = null;
+    this.keyNameInput = null;
+    this.testResult = null;
+    this.storedKeys = null;
 
     // Selected provider/model from the bar
     this.selectedProvider = null;
@@ -133,6 +186,8 @@ class ChatAgent {
     this._loadUserEntries();
   }
 
+  /** Devuelve la ayuda del plugin con titulo y contenido HTML.
+    @returns {{title: string, content: Promise}} Objeto con titulo y promesa del contenido. */
   getHelp() {
     return {
       title: 'Asistente API-IDEE',
@@ -148,6 +203,7 @@ class ChatAgent {
      User entries persistence (localStorage)
      ------------------------------------------------------------------ */
 
+  /** Carga las entradas de usuario (claves guardadas) desde localStorage. */
   _loadUserEntries() {
     try {
       var raw = localStorage.getItem(CHATAGENT_STORAGE_KEY);
@@ -162,6 +218,7 @@ class ChatAgent {
     }
   }
 
+  /** Guarda las entradas de usuario en localStorage. */
   _saveUserEntries() {
     try {
       localStorage.setItem(CHATAGENT_STORAGE_KEY, JSON.stringify(this.userEntries));
@@ -170,6 +227,9 @@ class ChatAgent {
     }
   }
 
+  /** Busca una entrada de usuario guardada por su ID.
+    @param {string} id Identificador de la entrada.
+    @returns {Object|null} Entrada encontrada o null. */
   _findEntryById(id) {
     return this.userEntries.find(function(e) { return e.id === id; }) || null;
   }
@@ -178,6 +238,8 @@ class ChatAgent {
      Plugin lifecycle
      ------------------------------------------------------------------ */
 
+  /** Aniade el plugin al mapa. Crea el panel, el control y monta el HTML del chat.
+    @param {IDEE.Map} map Mapa de API-IDEE. */
   addTo(map) {
     var self = this;
     this.map_ = map;
@@ -248,6 +310,7 @@ class ChatAgent {
 
     this.control_.createView = function() {
       var container = document.createElement('div');
+      container.style.display = 'none';
       return container;
     };
 
@@ -257,11 +320,6 @@ class ChatAgent {
     var panelControls = document.querySelector('.g-chatagent .m-panel-controls');
     if (panelControls) {
       panelControls.innerHTML = htmlPanel;
-    }
-
-    var contentsEl = document.querySelector('#m-chatagent-body');
-    if (contentsEl) {
-      contentsEl.appendChild(this.control_.getElement());
     }
 
     IDEE.utils.draggabillyPlugin(this.panel_, '#m-chatagent-title');
@@ -281,25 +339,32 @@ class ChatAgent {
      Lifecycle
      ------------------------------------------------------------------ */
 
+  /** Configura las referencias DOM y los eventos al activarse el control del chat. */
   _onActivate() {
     this.messagesContainer = document.querySelector('#chatagent-messages');
     this.inputElement = document.querySelector('#chatagent-input');
     this.loadingEl = document.querySelector('#chatagent-loading');
-    var sendBtn = document.querySelector('#chatagent-send');
-    var providerSelect = document.querySelector('#chatagent-provider-select');
-    var modelSelect = document.querySelector('#chatagent-model-select');
-    var settingsToggle = document.querySelector('#chatagent-settings-toggle');
-    var connTest = document.querySelector('#chatagent-connection-test');
-    var settingsSave = document.querySelector('#chatagent-settings-save');
-    var apiKeyToggle = document.querySelector('#chatagent-api-key-toggle');
+    this.sendBtn = document.querySelector('#chatagent-send');
+    this.providerSelect = document.querySelector('#chatagent-provider-select');
+    this.modelSelect = document.querySelector('#chatagent-model-select');
+    this.settingsToggle = document.querySelector('#chatagent-settings-toggle');
+    this.settingsPanel = document.querySelector('#chatagent-settings-panel');
+    this.settingsProv = document.querySelector('#chatagent-settings-provider');
+    this.settingsSave = document.querySelector('#chatagent-settings-save');
+    this.connTest = document.querySelector('#chatagent-connection-test');
+    this.apiKeyToggle = document.querySelector('#chatagent-api-key-toggle');
+    this.apiKeyInput = document.querySelector('#chatagent-api-key');
+    this.keyNameInput = document.querySelector('#chatagent-key-name');
+    this.testResult = document.querySelector('#chatagent-test-result');
+    this.storedKeys = document.querySelector('#chatagent-stored-keys');
 
-    if (!this.messagesContainer || !this.inputElement || !sendBtn) {
+    if (!this.messagesContainer || !this.inputElement || !this.sendBtn) {
       return;
     }
 
     var self = this;
 
-    sendBtn.disabled = true;
+    this.sendBtn.disabled = true;
     this.inputElement.disabled = true;
 
     this._onSendClick = function() { self._sendMessage(); };
@@ -314,56 +379,55 @@ class ChatAgent {
       self.inputElement.style.height = self.inputElement.scrollHeight + 'px';
     };
 
-    sendBtn.addEventListener('click', this._onSendClick);
+    this.sendBtn.addEventListener('click', this._onSendClick);
     this.inputElement.addEventListener('keydown', this._onInputKeydown);
     this.inputElement.addEventListener('input', this._onInputChange);
 
     // Provider select in bar
-    if (providerSelect) {
-      providerSelect.addEventListener('change', function() {
-        self._onProviderChange(providerSelect.value);
+    if (this.providerSelect) {
+      this.providerSelect.addEventListener('change', function() {
+        self._onProviderChange(self.providerSelect.value);
       });
     }
-    if (modelSelect) {
-      modelSelect.addEventListener('change', function() {
-        self.selectedModel = modelSelect.value;
+    if (this.modelSelect) {
+      this.modelSelect.addEventListener('change', function() {
+        self.selectedModel = self.modelSelect.value;
       });
     }
 
     // Settings toggle
-    if (settingsToggle) {
-      settingsToggle.addEventListener('click', function() {
+    if (this.settingsToggle) {
+      this.settingsToggle.addEventListener('click', function() {
         self._toggleSettings();
       });
     }
 
     // Test connection
-    if (connTest) {
-      connTest.addEventListener('click', function() {
+    if (this.connTest) {
+      this.connTest.addEventListener('click', function() {
         self._testKey();
       });
     }
 
     // Save key
-    if (settingsSave) {
-      settingsSave.addEventListener('click', function() {
+    if (this.settingsSave) {
+      this.settingsSave.addEventListener('click', function() {
         self._saveKey();
       });
     }
 
     // API key visibility toggle
-    if (apiKeyToggle) {
-      apiKeyToggle.addEventListener('click', function() {
-        var input = document.querySelector('#chatagent-api-key');
-        if (input) {
-          input.type = input.type === 'password' ? 'text' : 'password';
+    if (this.apiKeyToggle) {
+      this.apiKeyToggle.addEventListener('click', function() {
+        if (self.apiKeyInput) {
+          self.apiKeyInput.type = self.apiKeyInput.type === 'password' ? 'text' : 'password';
         }
       });
     }
 
     // Fetch providers and populate selectors
     this._fetchProviders().then(function() {
-      sendBtn.disabled = false;
+      self.sendBtn.disabled = false;
       self.inputElement.disabled = false;
       self.inputElement.focus();
       var welcome = self.options.welcomeMessage
@@ -376,15 +440,15 @@ class ChatAgent {
         + '</ul>';
       self._appendMessage('assistant', welcome);
     }).catch(function() {
-      sendBtn.disabled = false;
+      self.sendBtn.disabled = false;
       self.inputElement.disabled = false;
     });
   }
 
+  /** Elimina los listeners de eventos al desactivarse el control. */
   _onDeactivate() {
-    var sendBtn = document.querySelector('#chatagent-send');
-    if (sendBtn && this._onSendClick) {
-      sendBtn.removeEventListener('click', this._onSendClick);
+    if (this.sendBtn && this._onSendClick) {
+      this.sendBtn.removeEventListener('click', this._onSendClick);
     }
     if (this.inputElement) {
       if (this._onInputKeydown) this.inputElement.removeEventListener('keydown', this._onInputKeydown);
@@ -392,6 +456,7 @@ class ChatAgent {
     }
   }
 
+  /** Destruye el plugin, elimina el control del mapa y libera recursos. */
   destroy() {
     this._onDeactivate();
     if (this.map_ && this.panel_) {
@@ -406,6 +471,8 @@ class ChatAgent {
      Provider selection
      ------------------------------------------------------------------ */
 
+  /** Maneja el cambio de proveedor seleccionado en la barra superior.
+    @param {string} value Identificador del proveedor (o prefijo __entry__ para claves guardadas). */
   _onProviderChange(value) {
     if (value && value.indexOf('__entry__') === 0) {
       // User entry selected
@@ -429,6 +496,7 @@ class ChatAgent {
      Provider / Model fetching
      ------------------------------------------------------------------ */
 
+  /** Obtiene la lista de proveedores disponibles desde el backend. */
   async _fetchProviders() {
     try {
       var res = await fetch(this.options.backendUrl + '/providers/');
@@ -440,27 +508,25 @@ class ChatAgent {
     }
   }
 
+  /** Puebla los selectores de proveedor y modelo con los datos obtenidos del backend. */
   _populateSelectors() {
-    var providerSelect = document.querySelector('#chatagent-provider-select');
-    var modelSelect = document.querySelector('#chatagent-model-select');
-    var settingsProv = document.querySelector('#chatagent-settings-provider');
-    if (!providerSelect || !modelSelect || !this.providers.length) return;
+    if (!this.providerSelect || !this.modelSelect || !this.providers.length) return;
     var self = this;
 
-    providerSelect.innerHTML = '';
-    if (settingsProv) settingsProv.innerHTML = '';
+    this.providerSelect.innerHTML = '';
+    if (this.settingsProv) this.settingsProv.innerHTML = '';
 
     // Server providers
     this.providers.forEach(function(p) {
       var opt = document.createElement('option');
       opt.value = p.name;
       opt.textContent = p.name;
-      providerSelect.appendChild(opt);
-      if (settingsProv) {
+      self.providerSelect.appendChild(opt);
+      if (self.settingsProv) {
         var opt2 = document.createElement('option');
         opt2.value = p.name;
         opt2.textContent = p.name;
-        settingsProv.appendChild(opt2);
+        self.settingsProv.appendChild(opt2);
       }
     });
 
@@ -469,72 +535,72 @@ class ChatAgent {
       var sep = document.createElement('option');
       sep.disabled = true;
       sep.textContent = '─── Tus claves ───';
-      providerSelect.appendChild(sep);
+      this.providerSelect.appendChild(sep);
 
       this.userEntries.forEach(function(e) {
         var opt = document.createElement('option');
         opt.value = '__entry__' + e.id;
         opt.textContent = '\uD83D\uDD11 ' + e.name;
-        providerSelect.appendChild(opt);
+        self.providerSelect.appendChild(opt);
       });
     }
 
     // Restore selection
     if (this._activeEntryId) {
-      providerSelect.value = '__entry__' + this._activeEntryId;
+      this.providerSelect.value = '__entry__' + this._activeEntryId;
     } else if (this.selectedProvider) {
-      providerSelect.value = this.selectedProvider;
+      this.providerSelect.value = this.selectedProvider;
     } else {
       this.selectedProvider = this.providers[0].name;
-      providerSelect.value = this.selectedProvider;
+      this.providerSelect.value = this.selectedProvider;
     }
 
-    if (settingsProv) settingsProv.value = this.selectedProvider;
+    if (this.settingsProv) this.settingsProv.value = this.selectedProvider;
     this._updateModelSelect(this.selectedProvider || this.providers[0].name);
   }
 
+  /** Actualiza el selector de modelos segun el proveedor indicado.
+    @param {string} providerName Nombre del proveedor. */
   _updateModelSelect(providerName) {
-    var modelSelect = document.querySelector('#chatagent-model-select');
-    if (!modelSelect) return;
+    if (!this.modelSelect) return;
 
     var provider = this.providers.find(function(p) { return p.name === providerName; });
     if (!provider) return;
 
-    modelSelect.innerHTML = '';
+    this.modelSelect.innerHTML = '';
     provider.models.forEach(function(m) {
       var opt = document.createElement('option');
       opt.value = m.id;
       opt.textContent = m.label;
-      modelSelect.appendChild(opt);
-    });
+      this.modelSelect.appendChild(opt);
+    }, this);
 
     var defaultModel = provider.default_model;
     if (defaultModel && provider.models.some(function(m) { return m.id === defaultModel; })) {
-      modelSelect.value = defaultModel;
+      this.modelSelect.value = defaultModel;
     }
-    this.selectedModel = modelSelect.value;
+    this.selectedModel = this.modelSelect.value;
   }
 
+  /** Refresca la barra de proveedor y el selector del panel de configuracion. */
   _refreshProviderBar() {
-    var providerSelect = document.querySelector('#chatagent-provider-select');
-    var settingsProv = document.querySelector('#chatagent-settings-provider');
-    if (!providerSelect) return;
+    if (!this.providerSelect) return;
     var self = this;
 
-    providerSelect.innerHTML = '';
-    if (settingsProv) settingsProv.innerHTML = '';
+    this.providerSelect.innerHTML = '';
+    if (this.settingsProv) this.settingsProv.innerHTML = '';
 
     // Server providers
     this.providers.forEach(function(p) {
       var opt = document.createElement('option');
       opt.value = p.name;
       opt.textContent = p.name;
-      providerSelect.appendChild(opt);
-      if (settingsProv) {
+      self.providerSelect.appendChild(opt);
+      if (self.settingsProv) {
         var opt2 = document.createElement('option');
         opt2.value = p.name;
         opt2.textContent = p.name;
-        settingsProv.appendChild(opt2);
+        self.settingsProv.appendChild(opt2);
       }
     });
 
@@ -543,25 +609,25 @@ class ChatAgent {
       var sep = document.createElement('option');
       sep.disabled = true;
       sep.textContent = '─── Tus claves ───';
-      providerSelect.appendChild(sep);
+      this.providerSelect.appendChild(sep);
 
       this.userEntries.forEach(function(e) {
         var opt = document.createElement('option');
         opt.value = '__entry__' + e.id;
         opt.textContent = '\uD83D\uDD11 ' + e.name;
-        providerSelect.appendChild(opt);
+        self.providerSelect.appendChild(opt);
       });
     }
 
     // Restore selection
     if (this._activeEntryId) {
-      providerSelect.value = '__entry__' + this._activeEntryId;
+      this.providerSelect.value = '__entry__' + this._activeEntryId;
     } else if (this.selectedProvider) {
-      providerSelect.value = this.selectedProvider;
+      this.providerSelect.value = this.selectedProvider;
     }
 
-    if (settingsProv && this.selectedProvider) {
-      settingsProv.value = this.selectedProvider;
+    if (this.settingsProv && this.selectedProvider) {
+      this.settingsProv.value = this.selectedProvider;
     }
   }
 
@@ -569,6 +635,7 @@ class ChatAgent {
      Settings panel
      ------------------------------------------------------------------ */
 
+  /** Abre o cierra el panel de configuracion de claves. */
   _toggleSettings() {
     var panel = document.querySelector('#chatagent-settings-panel');
     if (!panel) return;
@@ -576,44 +643,42 @@ class ChatAgent {
     if (isOpen) {
       this._renderStoredKeys();
       this._clearTestResult();
-      var settingsProv = document.querySelector('#chatagent-settings-provider');
-      if (settingsProv && this.selectedProvider) {
-        settingsProv.value = this.selectedProvider;
+      if (this.settingsProv && this.selectedProvider) {
+        this.settingsProv.value = this.selectedProvider;
       }
     }
   }
 
+  /** Limpia el resultado de la prueba de conexion y deshabilita el boton Guardar. */
   _clearTestResult() {
-    var el = document.querySelector('#chatagent-test-result');
-    if (el) {
-      el.innerHTML = '';
-      el.className = 'chatagent-test-result';
+    if (this.testResult) {
+      this.testResult.innerHTML = '';
+      this.testResult.className = 'chatagent-test-result';
     }
-    var saveBtn = document.querySelector('#chatagent-settings-save');
-    if (saveBtn) saveBtn.disabled = true;
+    if (this.settingsSave) this.settingsSave.disabled = true;
   }
 
+  /** Muestra el resultado de la prueba de conexion (exito o error).
+    @param {boolean} ok true si la prueba fue exitosa.
+    @param {string} msg Mensaje a mostrar. */
   _showTestResult(ok, msg) {
-    var el = document.querySelector('#chatagent-test-result');
-    if (!el) return;
-    el.innerHTML = msg;
-    el.className = 'chatagent-test-result ' + (ok ? 'success' : 'error');
+    if (!this.testResult) return;
+    this.testResult.innerHTML = msg;
+    this.testResult.className = 'chatagent-test-result ' + (ok ? 'success' : 'error');
 
-    var saveBtn = document.querySelector('#chatagent-settings-save');
-    if (saveBtn) saveBtn.disabled = !ok;
+    if (this.settingsSave) this.settingsSave.disabled = !ok;
 
-    if (ok) {
-      var nameInput = document.querySelector('#chatagent-key-name');
-      nameInput && nameInput.focus();
+    if (ok && this.keyNameInput) {
+      this.keyNameInput.focus();
     }
   }
 
+  /** Renderiza la lista de claves guardadas en el panel de configuracion. */
   _renderStoredKeys() {
-    var container = document.querySelector('#chatagent-stored-keys');
-    if (!container) return;
+    if (!this.storedKeys) return;
 
     if (this.userEntries.length === 0) {
-      container.innerHTML = '<div class="chatagent-stored-empty">No hay claves guardadas</div>';
+      this.storedKeys.innerHTML = '<div class="chatagent-stored-empty">No hay claves guardadas</div>';
       return;
     }
 
@@ -630,9 +695,9 @@ class ChatAgent {
         +   '<button class="chatagent-stored-item-del" data-entry-id="' + e.id + '" title="Eliminar">×</button>'
         + '</div>';
     });
-    container.innerHTML = html;
+    this.storedKeys.innerHTML = html;
 
-    container.querySelectorAll('.chatagent-stored-item-del').forEach(function(btn) {
+    this.storedKeys.querySelectorAll('.chatagent-stored-item-del').forEach(function(btn) {
       btn.addEventListener('click', function() {
         var id = btn.getAttribute('data-entry-id');
         self._deleteEntry(id);
@@ -640,12 +705,10 @@ class ChatAgent {
     });
   }
 
+  /** Prueba una API key contra el backend para validarla. */
   async _testKey() {
-    var provSelect = document.querySelector('#chatagent-settings-provider');
-    var apiKeyInput = document.querySelector('#chatagent-api-key');
-
-    var provider = provSelect ? provSelect.value : '';
-    var apiKey = apiKeyInput ? apiKeyInput.value.trim() : '';
+    var provider = this.settingsProv ? this.settingsProv.value : '';
+    var apiKey = this.apiKeyInput ? this.apiKeyInput.value.trim() : '';
 
     if (!provider) {
       this._showTestResult(false, 'Selecciona un proveedor');
@@ -653,7 +716,7 @@ class ChatAgent {
     }
     if (!apiKey) {
       this._showTestResult(false, 'Introduce la API key');
-      apiKeyInput && apiKeyInput.focus();
+      this.apiKeyInput && this.apiKeyInput.focus();
       return;
     }
 
@@ -679,18 +742,15 @@ class ChatAgent {
     }
   }
 
+  /** Guarda una nueva entrada de API key en localStorage y la selecciona. */
   _saveKey() {
-    var nameInput = document.querySelector('#chatagent-key-name');
-    var provSelect = document.querySelector('#chatagent-settings-provider');
-    var apiKeyInput = document.querySelector('#chatagent-api-key');
+    var name = this.keyNameInput ? this.keyNameInput.value.trim() : '';
+    var provider = this.settingsProv ? this.settingsProv.value : '';
+    var apiKey = this.apiKeyInput ? this.apiKeyInput.value.trim() : '';
 
-    var name = nameInput ? nameInput.value.trim() : '';
-    var provider = provSelect ? provSelect.value : '';
-    var apiKey = apiKeyInput ? apiKeyInput.value.trim() : '';
-
-    if (!name) { nameInput && nameInput.focus(); return; }
-    if (!provider) { provSelect && provSelect.focus(); return; }
-    if (!apiKey) { apiKeyInput && apiKeyInput.focus(); return; }
+    if (!name) { this.keyNameInput && this.keyNameInput.focus(); return; }
+    if (!provider) { this.settingsProv && this.settingsProv.focus(); return; }
+    if (!apiKey) { this.apiKeyInput && this.apiKeyInput.focus(); return; }
 
     var newEntry = {
       id: 'key_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
@@ -714,6 +774,8 @@ class ChatAgent {
     this._clearTestResult();
   }
 
+  /** Elimina una entrada de usuario por su ID tras confirmacion.
+    @param {string} id Identificador de la entrada. */
   _deleteEntry(id) {
     if (!id) return;
     var entry = this._findEntryById(id);
@@ -740,6 +802,8 @@ class ChatAgent {
      Chat logic
      ------------------------------------------------------------------ */
 
+  /** Devuelve la API key activa (de una entrada guardada) o null si no hay.
+    @returns {string|null} API key o null. */
   _getEffectiveApiKey() {
     if (this._activeEntryId) {
       var entry = this._findEntryById(this._activeEntryId);
@@ -748,6 +812,20 @@ class ChatAgent {
     return null;
   }
 
+  /** Construye el cuerpo de la peticion anadiendo proveedor, modelo y API key activa.
+    @param {Object} base Cuerpo base de la peticion.
+    @returns {Object} Cuerpo completo con proveedor, modelo y API key. */
+  _buildRequestBody(base) {
+    var body = Object.assign({}, base);
+    if (this.selectedProvider) body.provider = this.selectedProvider;
+    if (this.selectedModel) body.model = this.selectedModel;
+    var apiKey = this._getEffectiveApiKey();
+    if (apiKey) body.api_key = apiKey;
+    return body;
+  }
+
+  /** Captura el estado actual del mapa (centro, zoom y SRS).
+    @returns {{center: {lat: number, lon: number}, zoom: number, srs: string}|null} Estado del mapa o null. */
   _getMapState() {
     if (!this.map_) return null;
     try {
@@ -762,6 +840,7 @@ class ChatAgent {
     }
   }
 
+  /** Crea una nueva conversacion en el backend y almacena su ID. */
   async _createConversation() {
     try {
       var res = await fetch(this.options.backendUrl + '/conversations/', {
@@ -778,6 +857,7 @@ class ChatAgent {
     }
   }
 
+  /** Envia el mensaje del usuario al backend y procesa la respuesta (texto o tool_calls). */
   async _sendMessage() {
     if (!this.inputElement) return;
     var content = this.inputElement.value.trim();
@@ -796,12 +876,7 @@ class ChatAgent {
 
     try {
       var mapState = this._getMapState();
-      var body = { content: content, map_state: mapState };
-      if (this.selectedProvider) body.provider = this.selectedProvider;
-      if (this.selectedModel) body.model = this.selectedModel;
-
-      var apiKey = this._getEffectiveApiKey();
-      if (apiKey) body.api_key = apiKey;
+      var body = this._buildRequestBody({ content: content, map_state: mapState });
 
       var res = await fetch(
         this.options.backendUrl + '/conversations/' + this.conversationId + '/chat/',
@@ -833,23 +908,20 @@ class ChatAgent {
     }
   }
 
+  /** Procesa una lista de llamadas a herramientas del mapa y envia los resultados al backend.
+    @param {Array<{name: string, args?: Object, id?: string}>} toolCalls Lista de herramientas a ejecutar. */
   async _handleToolCalls(toolCalls) {
     for (var i = 0; i < toolCalls.length; i++) {
       var tc = toolCalls[i];
       var result = chatagentExecuteTool(this.map_, tc.name, tc.args || {});
 
       try {
-        var body = {
+        var body = this._buildRequestBody({
           tool_name: tc.name,
           tool_call_id: tc.id || '',
           result: result,
           success: result.success !== false,
-        };
-        if (this.selectedProvider) body.provider = this.selectedProvider;
-        if (this.selectedModel) body.model = this.selectedModel;
-
-        var apiKey = this._getEffectiveApiKey();
-        if (apiKey) body.api_key = apiKey;
+        });
 
         var res = await fetch(
           this.options.backendUrl + '/conversations/' + this.conversationId + '/tool-result/',
@@ -881,6 +953,10 @@ class ChatAgent {
      UI helpers
      ------------------------------------------------------------------ */
 
+  /** Aniade un mensaje al contenedor del chat y hace scroll automatico.
+    @param {string} role Rol del mensaje (user, assistant, system).
+    @param {string} content Contenido HTML del mensaje.
+    @param {Array} [sources] Fuentes citadas opcionales. */
   _appendMessage(role, content, sources) {
     if (!this.messagesContainer) return;
 
@@ -914,6 +990,8 @@ class ChatAgent {
     this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
   }
 
+  /** Muestra u oculta el indicador de carga en el chat.
+    @param {boolean} visible true para mostrar, false para ocultar. */
   _showLoading(visible) {
     if (!this.loadingEl) return;
     if (visible) {
