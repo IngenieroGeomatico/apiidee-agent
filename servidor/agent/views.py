@@ -141,28 +141,15 @@ class ConversationViewSet(
             conversation.title = user_content[:100]
             conversation.save(update_fields=['title'])
 
-        # Build history and delegate to Agent
+        # Delegate to Agent
         history = _build_history(conversation)
-        agent = Agent(provider_name=provider_name, model=model, api_key=api_key)
+        agent = _make_agent(provider_name, model, api_key)
         result = agent.run(user_content, history, map_state=map_state)
 
-        # Persist and return response
-        metadata = {"sources": result.sources}
+        extra = {}
         if result.tool_calls:
-            metadata["tool_calls"] = result.tool_calls
-
-        assistant_msg = Message.objects.create(
-            conversation=conversation,
-            role=Message.Role.ASSISTANT,
-            content=result.content,
-            metadata=metadata,
-        )
-
-        data = MessageSerializer(assistant_msg).data
-        data["type"] = result.type
-        if result.tool_calls:
-            data["tool_calls"] = result.tool_calls
-        return Response(data, status=status.HTTP_201_CREATED)
+            extra["tool_calls"] = result.tool_calls
+        return _assistant_response(conversation, result, extra)
 
     @action(detail=True, methods=['post'], url_path='tool-result')
     def tool_result(self, request, pk=None):
@@ -189,20 +176,10 @@ class ConversationViewSet(
 
         # Delegate to Agent
         history = _build_history(conversation)
-        agent = Agent(provider_name=provider_name, model=model, api_key=api_key)
+        agent = _make_agent(provider_name, model, api_key)
         result = agent.process_tool_result(tool_name, result_data, success, history)
 
-        # Persist and return
-        assistant_msg = Message.objects.create(
-            conversation=conversation,
-            role=Message.Role.ASSISTANT,
-            content=result.content,
-            metadata={"sources": result.sources},
-        )
-
-        data = MessageSerializer(assistant_msg).data
-        data["type"] = result.type
-        return Response(data, status=status.HTTP_201_CREATED)
+        return _assistant_response(conversation, result)
 
 
 def _build_history(conversation) -> list:
@@ -217,3 +194,26 @@ def _build_history(conversation) -> list:
             m["tool_call_id"] = msg.metadata.get("tool_call_id", "")
         messages.append(m)
     return messages
+
+
+def _make_agent(provider_name, model, api_key):
+    """Crea un agente con los parámetros opcionales de proveedor, modelo y API key."""
+    return Agent(provider_name=provider_name, model=model, api_key=api_key)
+
+
+def _assistant_response(conversation, result, extra=None):
+    """Persiste la respuesta del asistente y devuelve un Response DRF."""
+    metadata = {"sources": result.sources}
+    if extra:
+        metadata.update(extra)
+    msg = Message.objects.create(
+        conversation=conversation,
+        role=Message.Role.ASSISTANT,
+        content=result.content,
+        metadata=metadata,
+    )
+    data = MessageSerializer(msg).data
+    data["type"] = result.type
+    if extra and "tool_calls" in extra:
+        data["tool_calls"] = extra["tool_calls"]
+    return Response(data, status=status.HTTP_201_CREATED)

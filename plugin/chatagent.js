@@ -307,23 +307,12 @@ class ChatAgent {
       + '</div>';
 
     this.control_ = new IDEE.Control(new IDEE.impl.Control(), 'chatAgentControl');
-
-    this.control_.createView = function() {
-      var container = document.createElement('div');
-      return container;
-    };
-
     this.panel_.addControls(this.control_);
     map.addPanels(this.panel_);
 
     var panelControls = document.querySelector('.g-chatagent .m-panel-controls');
     if (panelControls) {
       panelControls.innerHTML = htmlPanel;
-    }
-
-    var contentsEl = document.querySelector('#m-chatagent-body');
-    if (contentsEl) {
-      contentsEl.appendChild(this.control_.getElement());
     }
 
     IDEE.utils.draggabillyPlugin(this.panel_, '#m-chatagent-title');
