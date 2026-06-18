@@ -25,21 +25,25 @@ class BaseSkill(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
+        """Nombre único de la habilidad."""
         pass
 
     @property
     @abstractmethod
     def description(self) -> str:
+        """Descripción breve de lo que hace la habilidad."""
         pass
 
     @property
     @abstractmethod
     def tools(self) -> List[str]:
+        """Lista de nombres de herramientas que esta habilidad utiliza."""
         pass
 
     @property
     @abstractmethod
     def system_prompt_addition(self) -> str:
+        """Texto adicional para el prompt del sistema que define el comportamiento de la habilidad."""
         pass
 
 
@@ -47,6 +51,7 @@ class YamlSkill(BaseSkill):
     """A skill loaded from a YAML definition file."""
 
     def __init__(self, data: dict):
+        """Inicializa una habilidad a partir de un diccionario con los datos del YAML."""
         self._name = data["name"]
         self._description = data.get("description", "")
         self._tools = data.get("tools", [])
@@ -54,18 +59,22 @@ class YamlSkill(BaseSkill):
 
     @property
     def name(self):
+        """Nombre único de la habilidad."""
         return self._name
 
     @property
     def description(self):
+        """Descripción breve de lo que hace la habilidad."""
         return self._description
 
     @property
     def tools(self):
+        """Lista de nombres de herramientas que esta habilidad utiliza."""
         return list(self._tools)
 
     @property
     def system_prompt_addition(self):
+        """Texto adicional para el prompt del sistema que define el comportamiento de la habilidad."""
         return self._prompt
 
 
@@ -77,6 +86,7 @@ class SkillRegistry:
     _loaded = False
 
     def __new__(cls):
+        """Crea o devuelve la única instancia del singleton."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._skills = []
@@ -129,6 +139,7 @@ class SkillRegistry:
 
     @classmethod
     def get_all(cls) -> List[BaseSkill]:
+        """Devuelve todas las habilidades registradas, cargando definiciones si es necesario."""
         cls._load_definitions()
         return list(cls._skills)
 

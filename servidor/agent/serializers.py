@@ -4,6 +4,7 @@ from .models import Conversation, Message
 
 
 class MessageSerializer(serializers.ModelSerializer):
+    """Serializador para el modelo Message."""
     class Meta:
         model = Message
         fields = ['id', 'role', 'content', 'created_at', 'metadata']
@@ -11,6 +12,7 @@ class MessageSerializer(serializers.ModelSerializer):
 
 
 class ConversationSerializer(serializers.ModelSerializer):
+    """Serializador para el modelo Conversation. Incluye el conteo de mensajes."""
     message_count = serializers.IntegerField(source='messages.count', read_only=True)
 
     class Meta:
@@ -20,6 +22,7 @@ class ConversationSerializer(serializers.ModelSerializer):
 
 
 class ChatInputSerializer(serializers.Serializer):
+    """Serializador para validar la entrada del chat (mensaje del usuario)."""
     content = serializers.CharField(max_length=10000)
     map_state = serializers.JSONField(required=False, default=None)
     provider = serializers.CharField(max_length=100, required=False, default=None)
@@ -28,6 +31,7 @@ class ChatInputSerializer(serializers.Serializer):
 
 
 class ToolResultSerializer(serializers.Serializer):
+    """Serializador para validar los resultados de ejecución de herramientas."""
     tool_name = serializers.CharField(max_length=100)
     tool_call_id = serializers.CharField(max_length=200, required=False, default="")
     result = serializers.JSONField(default=dict)

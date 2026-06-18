@@ -65,11 +65,13 @@ def register_tool(name: str, description: str, parameters: dict):
 
 
 def get_all_tools() -> List[dict]:
+    """Devuelve todas las herramientas registradas, cargando definiciones si es necesario."""
     _load_definitions()
     return list(_tools_registry.values())
 
 
 def get_tool_by_name(name: str) -> Optional[dict]:
+    """Busca y devuelve una herramienta por su nombre, o None si no existe."""
     _load_definitions()
     return _tools_registry.get(name)
 
