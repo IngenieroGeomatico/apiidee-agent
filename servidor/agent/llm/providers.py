@@ -8,21 +8,27 @@ class ChatResponse:
     """Represents either a text response or a tool call."""
 
     def __init__(self, content: str = "", tool_calls: Optional[list] = None):
+        """Inicializa una respuesta con contenido textual y/o llamadas a herramientas."""
         self.content = content
         self.tool_calls = tool_calls or []
 
     @property
     def has_tool_calls(self):
+        """Indica si la respuesta incluye al menos una llamada a herramienta."""
         return len(self.tool_calls) > 0
 
 
 class BaseLLMProvider(ABC):
+    """Proveedor base abstracto para modelos de lenguaje."""
+
     @abstractmethod
     def chat(self, messages: List[Dict], tools: Optional[List] = None) -> ChatResponse:
+        """Envía una lista de mensajes al LLM y devuelve una respuesta."""
         pass
 
     @staticmethod
     def _convert_message(msg: dict):
+        """Convierte un dict de mensaje al formato LangChain correspondiente."""
         from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
         role = msg["role"]
@@ -44,6 +50,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
     """Generic provider for any OpenAI-compatible API endpoint."""
 
     def __init__(self, base_url: str, api_key: str, model: str):
+        """Configura el cliente LLM apuntando a una URL compatible con OpenAI."""
         from langchain_openai import ChatOpenAI
 
         self.model = model
@@ -55,6 +62,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         )
 
     def chat(self, messages, tools=None):
+        """Envía mensajes al LLM y maneja tool calls si están presentes."""
         lc_messages = [self._convert_message(m) for m in messages]
 
         llm = self.llm
@@ -74,7 +82,10 @@ class OpenAICompatibleProvider(BaseLLMProvider):
 
 
 class OpenAIProvider(BaseLLMProvider):
+    """Proveedor para la API oficial de OpenAI."""
+
     def __init__(self):
+        """Inicializa el cliente de OpenAI con la API key y modelo configurados."""
         if not settings.OPENAI_API_KEY:
             raise ValueError("OPENAI_API_KEY is not set in environment variables.")
 
@@ -87,6 +98,7 @@ class OpenAIProvider(BaseLLMProvider):
         )
 
     def chat(self, messages, tools=None):
+        """Envía mensajes al LLM y maneja tool calls si están presentes."""
         lc_messages = [self._convert_message(m) for m in messages]
 
         llm = self.llm
@@ -106,7 +118,10 @@ class OpenAIProvider(BaseLLMProvider):
 
 
 class GeminiProvider(BaseLLMProvider):
+    """Proveedor para Gemini (Google Generative AI)."""
+
     def __init__(self):
+        """Inicializa el cliente de Gemini con la API key y modelo configurados."""
         if not settings.GOOGLE_API_KEY:
             raise ValueError("GOOGLE_API_KEY is not set in environment variables.")
 
@@ -119,6 +134,7 @@ class GeminiProvider(BaseLLMProvider):
         )
 
     def chat(self, messages, tools=None):
+        """Envía mensajes al LLM y maneja tool calls si están presentes."""
         lc_messages = [self._convert_message(m) for m in messages]
 
         llm = self.llm

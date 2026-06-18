@@ -19,10 +19,10 @@ _faiss_store_cache: Dict[str, object] = {}
 
 
 def retrieve_context(query: str, k: int = 5) -> List[Dict]:
-    """Retrieve the top-k most relevant chunks across all indexed repos.
+    """Recupera los top-k fragmentos más relevantes de todos los repositorios indexados.
 
-    Returns a list of dicts with 'content' and 'metadata' keys.
-    Gracefully returns an empty list if no index exists.
+    Devuelve una lista de diccionarios con las claves 'content' y 'metadata'.
+    Devuelve una lista vacía si no existe ningún índice.
     """
     vectorstore_dir = Path(settings.VECTORSTORE_DIR)
     if not vectorstore_dir.exists():
@@ -84,6 +84,6 @@ def _load_faiss_store(store_path: Path):
 
 
 def clear_faiss_cache():
-    """Clear the in-memory FAISS store cache (useful after re-indexing)."""
+    """Limpia el caché en memoria de los almacenes FAISS (útil después de re-indexar)."""
     _faiss_store_cache.clear()
     logger.info("FAISS store cache cleared")
