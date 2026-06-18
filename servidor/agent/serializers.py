@@ -24,6 +24,7 @@ class ChatInputSerializer(serializers.Serializer):
     map_state = serializers.JSONField(required=False, default=None)
     provider = serializers.CharField(max_length=100, required=False, default=None)
     model = serializers.CharField(max_length=200, required=False, default=None)
+    api_key = serializers.CharField(max_length=500, required=False, default=None, write_only=True)
 
 
 class ToolResultSerializer(serializers.Serializer):
@@ -33,3 +34,4 @@ class ToolResultSerializer(serializers.Serializer):
     success = serializers.BooleanField(default=True)
     provider = serializers.CharField(max_length=100, required=False, default=None)
     model = serializers.CharField(max_length=200, required=False, default=None)
+    api_key = serializers.CharField(max_length=500, required=False, default=None, write_only=True)

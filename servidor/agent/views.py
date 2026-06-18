@@ -9,10 +9,12 @@ These views handle:
 They do NOT contain agent logic (prompt building, LLM calls, RAG retrieval).
 """
 import json
+import logging
 
+from django.conf import settings
 from django.http import JsonResponse
 from rest_framework import mixins, status, viewsets
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 
 from .agent import Agent
@@ -20,10 +22,63 @@ from .llm.config import get_configured_providers
 from .models import Conversation, Message
 from .serializers import ChatInputSerializer, ConversationSerializer, MessageSerializer, ToolResultSerializer
 
+logger = logging.getLogger(__name__)
+
 
 def providers_list(request):
     """Return all configured providers and their available models (no API keys)."""
     return JsonResponse(get_configured_providers(), safe=False)
+
+
+@api_view(['POST'])
+def test_api_key(request):
+    """Test an API key against a specific provider by fetching its models."""
+    provider_name = request.data.get('provider', '')
+    api_key = request.data.get('api_key', '')
+
+    if not api_key:
+        return Response({"valid": False, "error": "API key es requerida"}, status=400)
+    if not provider_name:
+        return Response({"valid": False, "error": "Nombre del proveedor es requerido"}, status=400)
+
+    # Find provider config
+    provider_config = None
+    for p in settings.LLM_PROVIDERS:
+        if p["name"].lower() == provider_name.lower():
+            provider_config = p
+            break
+
+    if not provider_config:
+        return Response({
+            "valid": False,
+            "error": f"Proveedor '{provider_name}' no encontrado. Disponibles: {', '.join(p['name'] for p in settings.LLM_PROVIDERS)}"
+        })
+
+    # Test the key by fetching models from the OpenAI-compatible endpoint
+    try:
+        import requests
+        base_url = provider_config["base_url"].rstrip("/")
+        headers = {"Authorization": f"Bearer {api_key}"}
+        resp = requests.get(f"{base_url}/models", headers=headers, timeout=15)
+
+        if resp.status_code == 200:
+            data = resp.json()
+            models = sorted(set(m["id"] for m in data.get("data", []) if "id" in m))
+            return Response({
+                "valid": True,
+                "provider": provider_config["name"],
+                "models": models,
+            })
+        else:
+            return Response({
+                "valid": False,
+                "error": f"HTTP {resp.status_code}: API key rechazada para '{provider_name}'",
+            })
+    except ImportError:
+        return Response({"valid": False, "error": "requests no instalado"}, status=500)
+    except Exception as exc:
+        logger.exception("Error testing API key")
+        return Response({"valid": False, "error": str(exc)})
 
 
 class ConversationViewSet(
@@ -54,6 +109,7 @@ class ConversationViewSet(
         map_state = input_serializer.validated_data.get('map_state')
         provider_name = input_serializer.validated_data.get('provider')
         model = input_serializer.validated_data.get('model')
+        api_key = input_serializer.validated_data.get('api_key')
 
         # Persist user message
         Message.objects.create(
@@ -67,7 +123,7 @@ class ConversationViewSet(
 
         # Build history and delegate to Agent
         history = _build_history(conversation)
-        agent = Agent(provider_name=provider_name, model=model)
+        agent = Agent(provider_name=provider_name, model=model, api_key=api_key)
         result = agent.run(user_content, history, map_state=map_state)
 
         # Persist and return response
@@ -101,6 +157,7 @@ class ConversationViewSet(
         success = serializer.validated_data['success']
         provider_name = serializer.validated_data.get('provider')
         model = serializer.validated_data.get('model')
+        api_key = serializer.validated_data.get('api_key')
 
         # Persist tool result
         Message.objects.create(
@@ -112,7 +169,7 @@ class ConversationViewSet(
 
         # Delegate to Agent
         history = _build_history(conversation)
-        agent = Agent(provider_name=provider_name, model=model)
+        agent = Agent(provider_name=provider_name, model=model, api_key=api_key)
         result = agent.process_tool_result(tool_name, result_data, success, history)
 
         # Persist and return

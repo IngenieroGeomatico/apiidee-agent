@@ -41,10 +41,11 @@ class Agent:
     """
 
     def __init__(self, provider_name: Optional[str] = None,
-                 model: Optional[str] = None):
+                 model: Optional[str] = None,
+                 api_key: Optional[str] = None):
         self.skill_registry = SkillRegistry()
         if provider_name and model:
-            self.provider = get_provider(provider_name, model)
+            self.provider = get_provider(provider_name, model, api_key=api_key)
         else:
             from django.conf import settings
             if settings.LLM_PROVIDERS:
@@ -52,6 +53,7 @@ class Agent:
                 self.provider = get_provider(
                     provider_name or first["name"],
                     model or first.get("default_model", ""),
+                    api_key=api_key,
                 )
             else:
                 self.provider = get_llm_provider()
