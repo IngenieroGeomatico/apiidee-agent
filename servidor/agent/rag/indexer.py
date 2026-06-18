@@ -17,6 +17,8 @@ from typing import Dict, List
 
 from django.conf import settings
 
+from html.parser import HTMLParser
+
 from .chunking import chunk_file
 
 logger = logging.getLogger(__name__)
@@ -181,6 +183,38 @@ class GitRepoIndexer(BaseIndexer):
 # Web page indexer
 # =========================================================================
 
+class _TextExtractor(HTMLParser):
+    """Extrae texto plano y enlaces de HTML, ignorando script/style/nav/footer/header."""
+
+    def __init__(self):
+        super().__init__()
+        self.text_parts = []
+        self.links = []
+        self._skip = False
+        self._skip_tags = {'script', 'style', 'nav', 'footer', 'header'}
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self._skip_tags:
+            self._skip = True
+        if tag == 'a':
+            for attr_name, attr_val in attrs:
+                if attr_name == 'href' and attr_val:
+                    self.links.append(attr_val)
+        if tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+            level = int(tag[1])
+            self.text_parts.append('\n' + '#' * level + ' ')
+        if tag in ('p', 'div', 'li', 'br', 'tr'):
+            self.text_parts.append('\n')
+
+    def handle_endtag(self, tag):
+        if tag in self._skip_tags:
+            self._skip = False
+
+    def handle_data(self, data):
+        if not self._skip:
+            self.text_parts.append(data)
+
+
 class WebIndexer(BaseIndexer):
     """Indexes a web page by fetching its HTML and extracting text content."""
 
@@ -192,7 +226,6 @@ class WebIndexer(BaseIndexer):
         import re
         from urllib.request import urlopen, Request
         from urllib.parse import urljoin, urlparse
-        from html.parser import HTMLParser
 
         visited = set()
         all_chunks = []
@@ -219,7 +252,7 @@ class WebIndexer(BaseIndexer):
                 continue
 
             # Extract text and links
-            text, links = self._parse_html(html)
+            text, links = _parse_html(html)
 
             if text.strip():
                 from .chunking import chunk_markdown_file
@@ -236,42 +269,12 @@ class WebIndexer(BaseIndexer):
 
         return all_chunks
 
-    @staticmethod
-    def _parse_html(html: str):
-        """Extract text content and links from HTML."""
 
-        class _TextExtractor(HTMLParser):
-            def __init__(self):
-                super().__init__()
-                self.text_parts = []
-                self.links = []
-                self._skip = False
-                self._skip_tags = {'script', 'style', 'nav', 'footer', 'header'}
-
-            def handle_starttag(self, tag, attrs):
-                if tag in self._skip_tags:
-                    self._skip = True
-                if tag == 'a':
-                    for attr_name, attr_val in attrs:
-                        if attr_name == 'href' and attr_val:
-                            self.links.append(attr_val)
-                if tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
-                    level = int(tag[1])
-                    self.text_parts.append('\n' + '#' * level + ' ')
-                if tag in ('p', 'div', 'li', 'br', 'tr'):
-                    self.text_parts.append('\n')
-
-            def handle_endtag(self, tag):
-                if tag in self._skip_tags:
-                    self._skip = False
-
-            def handle_data(self, data):
-                if not self._skip:
-                    self.text_parts.append(data)
-
-        parser = _TextExtractor()
-        parser.feed(html)
-        return ''.join(parser.text_parts), parser.links
+def _parse_html(html: str):
+    """Extract text content and links from HTML."""
+    parser = _TextExtractor()
+    parser.feed(html)
+    return ''.join(parser.text_parts), parser.links
 
 
 # =========================================================================
