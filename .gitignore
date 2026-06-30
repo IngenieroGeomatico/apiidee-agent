@@ -21,6 +21,9 @@ backend/providers.json
 servidor/providers.json
 servidor/providers.json.example
 
+# MCP server config (contains connection details)
+servidor/mcp_servers.json
+
 # Django
 *.sqlite3
 db.sqlite3
