@@ -517,7 +517,7 @@ Editar `servidor/mcp_servers.json`:
 [
   {
     "name": "mi-servidor",
-    "url": "http://localhost:8001/mcp",
+    "url": "http://localhost:8001",
     "timeout": 30
   }
 ]
@@ -545,6 +545,16 @@ Registered 3 MCP tools in the tool registry
 ```
 
 A partir de ahi, el LLM puede invocar las tools MCP como si fueran nativas. No hace falta reiniciar ni tocar codigo.
+
+### MCP es opcional
+
+Si no configuras servidores MCP, el sistema funciona exactamente igual que antes — el agente simplemente no tiene tools MCP registradas y todo el flujo sigue yendo al frontend. Los tres procesos posibles quedarian asi:
+
+| Proceso | Comando | Puerto | Obligatorio |
+|---------|---------|--------|-------------|
+| Visualizador API-IDEE | `python -m http.server 8080` | 8080 | Recomendado (o abrir `index.html` directamente) |
+| Agente Django | `python manage.py runserver` | 8000 | Sí |
+| Servidor MCP | `python test_mcp_server.py` | 8001 | Solo si usas MCP |
 
 ## Mejoras de rendimiento recientes
 
