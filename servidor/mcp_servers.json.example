@@ -1,0 +1,7 @@
+[
+  {
+    "name": "mi-servidor-ejemplo",
+    "url": "http://localhost:8001/mcp",
+    "timeout": 30
+  }
+]

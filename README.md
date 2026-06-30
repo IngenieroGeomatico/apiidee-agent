@@ -135,6 +135,45 @@ El modelo por defecto es **local** con `BAAI/bge-m3`, un modelo multilingüe gra
 
 **Donde vive**: `servidor/agent/rag/embeddings.py`
 
+### MCP (Model Context Protocol)
+
+**MCP** (Model Context Protocol) es un protocolo abierto creado por Anthropic que estandariza como los modelos de IA se conectan con herramientas y fuentes de datos externas. Piensa en el como un "USB-C para la IA": define una interfaz universal donde servidores MCP exponen tools, recursos y prompts mediante JSON-RPC.
+
+En este proyecto, MCP convive con el sistema de tools nativo:
+
+- **Tools del mapa** (nativas): se definen en `tools/definitions/*.json`, se ejecutan en el navegador via el plugin JS.
+- **Tools MCP** (externas): se descubren automaticamente via `tools/list` al arrancar el servidor, se ejecutan en el servidor via JSON-RPC.
+
+El LLM no distingue el origen de una tool — solo ve su nombre, descripcion y parametros. Cuando el LLM decide llamar a una tool MCP, el agente la ejecuta directamente en el servidor, realimenta el resultado al LLM y continua la conversacion en un bucle. Las tools del mapa se siguen devolviendo al frontend como antes.
+
+```
+LLM decide usar tool
+       │
+       ▼
+tool_call { name: "get_weather", args: { city: "Madrid" } }
+       │
+       ▼
+┌─ ¿Es MCP? ─────────────────────────────┐
+│ Sí → Servidor ejecuta via JSON-RPC      │
+│      │                                  │
+│      ▼                                  │
+│ Resultado → se realimenta al LLM        │
+│      │                                  │
+│      ▼                                  │
+│ LLM responde texto o nuevos tool_calls   │
+└─────────────────────────────────────────┘
+       │
+       ▼
+┌─ ¿Es del mapa? ────────────────────────┐
+│ Sí → Se devuelve al plugin JS           │
+│      (como siempre)                     │
+└─────────────────────────────────────────┘
+```
+
+Las tools MCP son ideales para operaciones que no requieren el mapa: consultar APIs externas, bases de datos, sistemas de ficheros, etc.
+
+**Donde vive**: `servidor/agent/mcp/` — configuracion en `mcp_servers.json`
+
 ### Resumen visual de las relaciones
 
 ```
@@ -455,6 +494,58 @@ No hay que tocar Python. El sistema auto-descubre los YAML al arrancar.
 | `navigation` | getMapCenter, getCurrentZoom, getMapExtent, zoomTo, setZoom | Navegar por el mapa y buscar ubicaciones |
 | `layer_management` | listActiveLayers, addWMSLayer, removeLayer | Gestionar capas del visualizador |
 
+## Integracion MCP
+
+Este proyecto soporta el protocolo MCP (Model Context Protocol) para conectar con servidores externos de herramientas. Las tools MCP se descubren automaticamente, se registran junto a las tools nativas del mapa y se ejecutan en el servidor.
+
+### Como agregar un servidor MCP
+
+Las tools del mapa y las MCP conviven sin conflicto. Si una tool MCP tiene el mismo nombre que una existente, se omite con un aviso.
+
+### 1. Copiar el archivo de configuracion
+
+```bash
+cd servidor
+cp mcp_servers.json.example mcp_servers.json
+```
+
+### 2. Configurar los servidores MCP
+
+Editar `servidor/mcp_servers.json`:
+
+```json
+[
+  {
+    "name": "mi-servidor",
+    "url": "http://localhost:8001/mcp",
+    "timeout": 30
+  }
+]
+```
+
+| Campo | Descripcion |
+|-------|-------------|
+| `name` | Nombre identificativo del servidor (solo para logs) |
+| `url` | Endpoint HTTP donde el servidor MCP acepta JSON-RPC |
+| `timeout` | Tiempo maximo de espera en segundos (opcional, por defecto 30) |
+
+### 3. Arrancar el servidor Django
+
+Al iniciar, el sistema se conecta a los servidores MCP configurados, descubre sus tools via `tools/list` y las registra automaticamente:
+
+```bash
+python manage.py runserver
+```
+
+Veras en los logs algo como:
+
+```
+Connected to MCP server 'mi-servidor' (3 tools)
+Registered 3 MCP tools in the tool registry
+```
+
+A partir de ahi, el LLM puede invocar las tools MCP como si fueran nativas. No hace falta reiniciar ni tocar codigo.
+
 ## Mejoras de rendimiento recientes
 
 ### Cache de embeddings
@@ -502,6 +593,9 @@ apiidee-agent/
 │   │   │       ├── getMapCenter.json
 │   │   │       ├── addWMSLayer.json
 │   │   │       └── ...
+│   │   ├── mcp/                      # Cliente MCP (Model Context Protocol)
+│   │   │   ├── client.py             # Cliente JSON-RPC sobre HTTP
+│   │   │   └── manager.py            # Singleton que gestiona N servidores MCP
 │   │   └── skills/                   # Definiciones de skills
 │   │       ├── base.py               # Auto-descubre definitions/*.yaml
 │   │       └── definitions/          # <-- ANADIR SKILLS AQUI
