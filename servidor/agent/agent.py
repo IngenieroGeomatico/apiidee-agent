@@ -5,8 +5,10 @@ Concepts:
 - Agent: Orchestrates the conversation. Receives messages, decides actions, returns responses.
 - Tool: An atomic action the agent can invoke (executed on the frontend, not here).
 - Skill: A domain expertise that groups tools + specialized prompt context.
+- MCP: Tools from external MCP servers are executed server-side, not on the frontend.
 """
 import json
+import logging
 from typing import Optional
 
 from .llm.config import get_llm_provider, get_provider
@@ -14,6 +16,8 @@ from .prompts import SYSTEM_PROMPT
 from .rag.retriever import retrieve_context
 from .skills.base import SkillRegistry
 from .tools.registry import get_langchain_tools
+
+logger = logging.getLogger(__name__)
 
 
 class AgentResponse:
@@ -34,10 +38,8 @@ class Agent:
     Responsibilities:
     - Build the system prompt from skills + RAG context + map state
     - Call the LLM with available tools
-    - Return either a text response or tool call instructions
-
-    The Agent does NOT handle HTTP, persistence, or serialization.
-    That's the view's job.
+    - Execute MCP tools server-side in a loop
+    - Return either a text response or map tool call instructions
     """
 
     def __init__(self, provider_name: Optional[str] = None,
@@ -45,6 +47,12 @@ class Agent:
                  api_key: Optional[str] = None):
         self.skill_registry = SkillRegistry()
         self.provider = self._init_provider(provider_name, model, api_key)
+        self.mcp_manager = self._init_mcp()
+
+    @staticmethod
+    def _init_mcp():
+        from agent.mcp.manager import MCPServerManager
+        return MCPServerManager.get_instance()
 
     def _init_provider(self, provider_name, model, api_key):
         if provider_name and model:
@@ -64,34 +72,21 @@ class Agent:
         """
         Process a user message and return a response.
 
-        Args:
-            user_message: The user's input text
-            history: List of message dicts with 'role', 'content', and optional metadata
-            map_state: Optional current state of the map (center, zoom, layers)
-
-        Returns:
-            AgentResponse with either text content or tool_call instructions
+        MCP tools are executed server-side in a loop; only map tools
+        are returned as tool_call for the frontend to execute.
         """
         rag_results = retrieve_context(query=user_message)
         system_prompt = self._build_system_prompt(rag_results, map_state)
         llm_messages = [{"role": "system", "content": system_prompt}, *history]
-        tools = get_langchain_tools()
-        response = self.provider.chat(llm_messages, tools=tools if tools else None)
-        return self._build_response(response, rag_results, is_tool_call=response.has_tool_calls)
+        return self._run_llm_loop(llm_messages, rag_results)
 
     def process_tool_result(self, tool_name: str, tool_result: dict,
                             success: bool, history: list) -> AgentResponse:
         """
         Process a tool execution result and generate a follow-up response.
 
-        Args:
-            tool_name: Name of the tool that was executed
-            tool_result: Result returned by the tool
-            success: Whether the tool execution succeeded
-            history: Full conversation history including the tool result message
-
-        Returns:
-            AgentResponse with the agent's interpretation of the tool result
+        Unlike run(), this does NOT include map state.
+        MCP tools are still handled inline if the LLM requests them.
         """
         last_user_content = ""
         for msg in reversed(history):
@@ -102,18 +97,88 @@ class Agent:
         rag_results = retrieve_context(query=last_user_content) if last_user_content else []
         system_prompt = self._build_system_prompt(rag_results)
         llm_messages = [{"role": "system", "content": system_prompt}, *history]
-        response = self.provider.chat(llm_messages)
-        return self._build_response(response, rag_results)
+        return self._run_llm_loop(llm_messages, rag_results)
 
-    def _build_response(self, response, rag_results, is_tool_call=False):
-        sources = [chunk["metadata"] for chunk in rag_results] if rag_results else []
-        if is_tool_call:
-            return AgentResponse(
-                content=response.content or "Ejecutando acción en el mapa...",
-                response_type="tool_call",
-                tool_calls=response.tool_calls,
-                sources=sources,
+    def _run_llm_loop(self, llm_messages: list, rag_results: list,
+                      max_iterations: int = 5) -> AgentResponse:
+        """
+        Call the LLM in a loop, executing MCP tools inline.
+
+        - If the LLM returns only map tools → return them as tool_call.
+        - If the LLM returns MCP tools → execute them, feed results back, loop.
+        - If the LLM returns text → return as text.
+        """
+        tools = get_langchain_tools()
+
+        for iteration in range(max_iterations):
+            response = self.provider.chat(
+                llm_messages,
+                tools=tools if tools else None,
             )
+
+            if not response.has_tool_calls:
+                return self._build_response(response, rag_results)
+
+            mcp_calls = [
+                tc for tc in response.tool_calls
+                if self.mcp_manager and self.mcp_manager.is_mcp_tool(tc["name"])
+            ]
+            map_calls = [
+                tc for tc in response.tool_calls
+                if not (self.mcp_manager and self.mcp_manager.is_mcp_tool(tc["name"]))
+            ]
+
+            if not mcp_calls:
+                return AgentResponse(
+                    content=response.content or "Ejecutando acción en el mapa...",
+                    response_type="tool_call",
+                    tool_calls=map_calls,
+                    sources=[chunk["metadata"] for chunk in rag_results] if rag_results else [],
+                )
+
+            for tc in mcp_calls:
+                try:
+                    result = self.mcp_manager.execute_tool(tc["name"], tc["args"])
+                    formatted = self._format_mcp_result(result)
+                    logger.info("MCP tool '%s' executed successfully", tc["name"])
+                except Exception as e:
+                    logger.exception("MCP tool '%s' failed", tc["name"])
+                    formatted = json.dumps({"error": str(e)}, ensure_ascii=False)
+
+                llm_messages.append({
+                    "role": "assistant",
+                    "content": response.content or "",
+                    "tool_calls": [tc],
+                })
+                llm_messages.append({
+                    "role": "tool",
+                    "content": formatted,
+                    "tool_call_id": tc["id"],
+                })
+
+        logger.warning("MCP iteration limit (%d) reached", max_iterations)
+        return AgentResponse(
+            content="Se alcanzó el límite de iteraciones de herramientas MCP.",
+            response_type="text",
+        )
+
+    @staticmethod
+    def _format_mcp_result(result) -> str:
+        """Convert MCP result (content array) to a plain string for the LLM."""
+        if isinstance(result, dict) and "content" in result:
+            texts = []
+            for item in result["content"]:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    texts.append(item.get("text", ""))
+                elif isinstance(item, str):
+                    texts.append(item)
+                else:
+                    texts.append(json.dumps(item, ensure_ascii=False))
+            return "\n".join(texts)
+        return json.dumps(result, ensure_ascii=False)
+
+    def _build_response(self, response, rag_results):
+        sources = [chunk["metadata"] for chunk in rag_results] if rag_results else []
         return AgentResponse(
             content=response.content,
             response_type="text",
