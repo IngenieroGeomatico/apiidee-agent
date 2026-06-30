@@ -76,6 +76,29 @@ def get_tool_by_name(name: str) -> Optional[dict]:
     return _tools_registry.get(name)
 
 
+def register_mcp_tools():
+    """Register all tools from MCP servers into the tool registry."""
+    from agent.mcp.manager import MCPServerManager
+
+    manager = MCPServerManager.get_instance()
+    if not manager or not manager.is_connected():
+        return
+
+    count = 0
+    for tool in manager.get_all_tools():
+        name = tool["name"]
+        if name in _tools_registry:
+            logger.warning(
+                "MCP tool '%s' conflicts with existing tool, skipping", name
+            )
+            continue
+        register_tool(name, tool["description"], tool["parameters"])
+        count += 1
+
+    if count:
+        logger.info("Registered %d MCP tools in the tool registry", count)
+
+
 def get_langchain_tools():
     """Convert registered tools to LangChain tool format for bind_tools()."""
     _load_definitions()

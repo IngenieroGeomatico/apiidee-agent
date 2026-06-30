@@ -171,3 +171,13 @@ if _PROVIDERS_PATH.exists():
         LLM_PROVIDERS = json.load(f)
 else:
     LLM_PROVIDERS = []
+
+
+# ---------------------------------------------------------------------------
+# MCP Servers — loaded from mcp_servers.json
+# ---------------------------------------------------------------------------
+
+MCP_SERVERS_PATH = os.getenv('MCP_SERVERS_PATH') or BASE_DIR / 'mcp_servers.json'
+if isinstance(MCP_SERVERS_PATH, str):
+    MCP_SERVERS_PATH = Path(MCP_SERVERS_PATH)
+MCP_SERVERS_PATH = MCP_SERVERS_PATH if MCP_SERVERS_PATH.exists() else None
