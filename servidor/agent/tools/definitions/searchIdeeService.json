@@ -1,0 +1,14 @@
+{
+  "name": "searchIdeeService",
+  "description": "Search for a geographic service by name in the official IDEE (Infraestructura de Datos Espaciales de España) service directory. Returns the service URL, its type (WMS, WMTS, MVT, TMS, WFS, OGCAPIFeatures), and name. Use this when the user asks to load a layer by name (e.g. 'Mapa Base de España – IGNBaseGris', 'PNOA', 'Catastro') and you need to find its URL and correct type.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Service name to search for (e.g. 'IGNBaseGris', 'PNOA', 'Catastro')"
+      }
+    },
+    "required": ["query"]
+  }
+}

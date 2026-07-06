@@ -1,0 +1,62 @@
+{
+  "name": "addLayer",
+  "description": "Add any type of layer to the map. Supports WMS, WMTS, WFS, GeoJSON, KML, XYZ, MVT, TMS, OGC API Features. Use 'type' for format, 'url' for service/data URL, 'name' for layer identifier. For GeoJSON provide url (the layer will be created with IDEE.layer.GeoJSON). For WMS/WMTS/WFS provide service URL and layer name.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "type": {
+        "type": "string",
+        "description": "Type of layer: WMS, WMTS, WFS, GeoJSON, KML, XYZ, MVT, TMS, OGCAPIFeatures",
+        "enum": ["WMS", "WMTS", "WFS", "GeoJSON", "KML", "XYZ", "MVT", "TMS", "OGCAPIFeatures"]
+      },
+      "url": {
+        "type": "string",
+        "description": "URL of the layer service or data file. Required for WMS, WMTS, WFS, XYZ, MVT, TMS, KML. Optional for GeoJSON if 'data' is provided."
+      },
+      "name": {
+        "type": "string",
+        "description": "Layer name/identifier from the service. For WMS/WMTS this is the layer name from the service. For WFS it is the typeName."
+      },
+      "legend": {
+        "type": "string",
+        "description": "Label to show in the map legend/layer tree. Defaults to 'name' if not provided."
+      },
+      "transparent": {
+        "type": "boolean",
+        "description": "Whether the layer background is transparent (WMS only)",
+        "default": true
+      },
+      "tiled": {
+        "type": "boolean",
+        "description": "Use tiled requests (WMS only)",
+        "default": false
+      },
+      "format": {
+        "type": "string",
+        "description": "Image format (e.g. 'image/png' for WMS/WMTS, 'application/json' for WFS)"
+      },
+      "style": {
+        "type": "string",
+        "description": "Layer style name (for WMS, WMTS)"
+      },
+      "data": {
+        "type": "string",
+        "description": "Inline GeoJSON data as a JSON string (for GeoJSON type only, alternative to 'url')"
+      },
+      "matrixSet": {
+        "type": "string",
+        "description": "Tile matrix set identifier (WMTS only, e.g. 'EPSG:25830')"
+      },
+      "version": {
+        "type": "string",
+        "description": "Service version (e.g. '1.1.1' for WMS, '2.0.0' for WFS)"
+      },
+      "fit": {
+        "type": "boolean",
+        "description": "If true, automatically zoom the map to fit the layer's extent after loading. The layer's getMaxExtent() is used to determine the extent.",
+        "default": false
+      }
+    },
+    "required": ["type"]
+  }
+}
