@@ -53,31 +53,172 @@ var CHATAGENT_TOOL_MAP = {
       srs: map.getProjection().code,
     };
   },
-  /** Añade una capa WMS al mapa.
+  /** Añade cualquier tipo de capa al mapa (WMS, WMTS, WFS, GeoJSON, KML, XYZ, MVT, TMS, OGCAPIFeatures).
     @param {IDEE.Map} map Mapa activo.
-    @param {{url: string, name: string, legend?: string, transparent?: boolean}} args Parámetros de la capa.
-    @returns {{success: boolean, name: string}} Resultado de la operación. */
-  addWMSLayer: function(map, args) {
-    var layer = new IDEE.layer.WMS({
-      url: args.url,
-      name: args.name,
-      legend: args.legend || args.name,
-      transparent: args.transparent !== undefined ? args.transparent : true,
-      tiled: false,
-    });
-    map.addLayers([layer]);
-    return { success: true, name: args.name };
+    @param {{type: string, url?: string, name?: string, legend?: string, transparent?: boolean, tiled?: boolean, format?: string, style?: string, data?: string, matrixSet?: string, version?: string}} args Parámetros de la capa.
+    @returns {{success: boolean, name?: string, type?: string, error?: string}} Resultado de la operación. */
+  addLayer: function(map, args) {
+    var type = (args.type || '').toUpperCase();
+    var legend = args.legend || args.name || type;
+    if (!args.name && type !== 'GEOJSON') args.name = legend;
+
+    var addedLayer;
+
+    switch (type) {
+      case 'WMS':
+        addedLayer = new IDEE.layer.WMS({
+          url: args.url,
+          name: args.name,
+          legend: legend,
+          transparent: args.transparent !== undefined ? args.transparent : true,
+          tiled: args.tiled !== undefined ? args.tiled : false,
+        });
+        break;
+
+      case 'WMTS':
+        addedLayer = new IDEE.layer.WMTS({
+          url: args.url,
+          name: args.name,
+          legend: legend,
+          style: args.style || 'default',
+          format: args.format || 'image/png',
+          matrixSet: args.matrixSet,
+        });
+        break;
+
+      case 'WFS':
+        addedLayer = new IDEE.layer.WFS({
+          url: args.url,
+          name: args.name,
+          legend: legend,
+          version: args.version || '2.0.0',
+        });
+        break;
+
+      case 'GEOJSON':
+        addedLayer = new IDEE.layer.GeoJSON({
+          url: args.url,
+          name: legend,
+          legend: legend,
+        });
+        break;
+
+      case 'KML':
+        map.addKML(args.url, legend);
+        break;
+
+      case 'XYZ':
+        map.addLayers([new IDEE.layer.XYZ({
+          url: args.url,
+          name: legend,
+          legend: legend,
+        })]);
+        break;
+
+      case 'MVT':
+        map.addMVT({
+          url: args.url,
+          name: legend,
+          legend: legend,
+        });
+        break;
+
+      case 'TMS':
+        map.addTMS({
+          url: args.url,
+          name: legend,
+          legend: legend,
+        });
+        break;
+
+      case 'OGCAPIFEATURES':
+        map.addOGCAPIFeatures({
+          url: args.url,
+          name: legend,
+          legend: legend,
+        });
+        break;
+
+      default:
+        return { success: false, error: 'Unsupported layer type: ' + type };
+    }
+
+    if (addedLayer) {
+      map.addLayers([addedLayer]);
+      if (args.fit) {
+        var fitHandler = function() {
+          if (typeof addedLayer.getMaxExtent === 'function') {
+            var extent = addedLayer.getMaxExtent();
+            if (extent && Array.isArray(extent) && extent.length === 4) {
+              try { map.setBbox({ x: { min: extent[0], max: extent[2] }, y: { min: extent[1], max: extent[3] } }); } catch (e) { console.error('setBbox error:', e); }
+            }
+          }
+        };
+        addedLayer.on(IDEE.evt.LOAD, fitHandler);
+        // Fallback: if LOAD already fired before handler registered, try fit
+        setTimeout(fitHandler, 3000);
+      }
+    }
+    return { success: true, name: args.name || legend, type: type };
   },
-  /** Centra el mapa en las coordenadas dadas con zoom opcional.
+  /** Centra el mapa en las coordenadas dadas, transformando al SRS del mapa si es necesario.
     @param {IDEE.Map} map Mapa activo.
-    @param {{lon: number, lat: number, zoom?: number}} args Coordenadas y zoom.
-    @returns {{success: boolean}} Resultado. */
+    @param {{lon: number, lat: number, zoom?: number, srs?: string}} args Coordenadas y zoom.
+    @returns {{success: boolean, srs?: string}} Resultado. */
   zoomTo: function(map, args) {
-    map.setCenter({ x: args.lon, y: args.lat });
+    var x = args.lon;
+    var y = args.lat;
+    var srcSrs = args.srs || 'EPSG:4326';
+    var dstSrs = map.getProjection ? map.getProjection().code : 'EPSG:3857';
+
+    if (srcSrs !== dstSrs) {
+      try {
+        var transformed = ol.proj.transform([x, y], srcSrs, dstSrs);
+        x = transformed[0];
+        y = transformed[1];
+      } catch (e) {
+        return { success: false, error: 'Coordinate transformation failed: ' + e.message };
+      }
+    }
+
+    map.setCenter({ x: x, y: y });
     if (args.zoom !== undefined) {
       map.setZoom(args.zoom);
     }
-    return { success: true };
+    return { success: true, srs: dstSrs };
+  },
+  /** Ajusta la vista del mapa al extent (bbox) dado, transformando al SRS del mapa.
+    @param {IDEE.Map} map Mapa activo.
+    @param {{minLon: number, minLat: number, maxLon: number, maxLat: number}} args Bounding box en EPSG:4326.
+    @returns {{success: boolean, srs?: string, error?: string}} Resultado. */
+  zoomToExtent: function(map, args) {
+    var dstSrs = map.getProjection ? map.getProjection().code : 'EPSG:3857';
+    var extent = [args.minLon, args.minLat, args.maxLon, args.maxLat];
+    var srcSrs = 'EPSG:4326';
+
+    if (srcSrs !== dstSrs) {
+      try {
+        extent = ol.proj.transformExtent(extent, srcSrs, dstSrs);
+      } catch (e) {
+        try {
+          var bl = ol.proj.transform([extent[0], extent[1]], srcSrs, dstSrs);
+          var tr = ol.proj.transform([extent[2], extent[3]], srcSrs, dstSrs);
+          extent = [bl[0], bl[1], tr[0], tr[1]];
+        } catch (e2) {
+          return { success: false, error: 'Coordinate transformation failed: ' + e2.message };
+        }
+      }
+    }
+
+    try {
+      map.setBbox({ x: { min: extent[0], max: extent[2] }, y: { min: extent[1], max: extent[3] } });
+    } catch (e) {
+      var cx = (extent[0] + extent[2]) / 2;
+      var cy = (extent[1] + extent[3]) / 2;
+      map.setCenter({ x: cx, y: cy });
+      map.setZoom(10);
+    }
+    return { success: true, srs: dstSrs };
   },
   /** Elimina una capa del mapa por su nombre.
     @param {IDEE.Map} map Mapa activo.
@@ -119,6 +260,18 @@ function chatagentExecuteTool(map, toolName, args) {
     return { success: false, error: err.message || String(err) };
   }
 }
+
+/** Envia un mensaje de seleccion rapida del usuario al chat.
+    Llamado desde botones/links HTML renderizados por el LLM en cualquier contexto
+    donde el usuario deba elegir entre opciones (candidatos de geocodificacion,
+    capas, acciones, etc.). La opcion clickeada se envia como mensaje de usuario
+    y se procesa por el flujo normal del chat.
+    @param {string} text Texto del mensaje a enviar (visible en el chat). */
+window.chatagentQuickReply = function(text) {
+  var inst = window.__chatagentPlugin;
+  if (!inst || !text) return;
+  inst._sendMessage(text);
+};
 
 /** Escapa caracteres HTML en una cadena para prevenir XSS.
     @param {string} unsafe Cadena sin escapar.
@@ -243,6 +396,7 @@ class ChatAgent {
   addTo(map) {
     var self = this;
     this.map_ = map;
+    window.__chatagentPlugin = this;
 
     var positionMap = {
       'TL': IDEE.ui.position.TL,
@@ -434,7 +588,7 @@ class ChatAgent {
         || '<p>Soy el asistente de API-IDEE. Puedo ayudarte con:</p>'
         + '<ul>'
         + '<li>Usar el visor de mapas</li>'
-        + '<li>Capas WMS, WMTS, WFS...</li>'
+        + '<li>Capas WMS, WMTS, WFS, GeoJSON, KML...</li>'
         + '<li>Desarrollar plugins</li>'
         + '<li>Navegar y buscar en el mapa</li>'
         + '</ul>';
@@ -857,14 +1011,18 @@ class ChatAgent {
     }
   }
 
-  /** Envia el mensaje del usuario al backend y procesa la respuesta (texto o tool_calls). */
-  async _sendMessage() {
+  /** Envia un mensaje del usuario al backend y procesa la respuesta (texto o tool_calls).
+      @param {string} [content] Contenido opcional. Si no se pasa, se lee del input. */
+  async _sendMessage(content) {
     if (!this.inputElement) return;
-    var content = this.inputElement.value.trim();
-    if (!content) return;
-
-    this.inputElement.value = '';
-    this.inputElement.style.height = 'auto';
+    if (content === undefined) {
+      content = this.inputElement.value.trim();
+      if (!content) return;
+      this.inputElement.value = '';
+      this.inputElement.style.height = 'auto';
+    } else if (!content) {
+      return;
+    }
 
     if (!this.conversationId) {
       await this._createConversation();

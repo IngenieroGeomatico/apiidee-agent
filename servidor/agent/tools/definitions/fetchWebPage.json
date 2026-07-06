@@ -1,0 +1,14 @@
+{
+  "name": "fetchWebPage",
+  "description": "Fetch and return the text content of a web page. Use this to look up live information about IDEE services, layer types, or any online resource when the user asks about available services or capabilities.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "URL of the web page to fetch"
+      }
+    },
+    "required": ["url"]
+  }
+}

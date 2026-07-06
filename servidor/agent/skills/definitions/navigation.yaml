@@ -6,11 +6,15 @@ tools:
   - getMapExtent
   - zoomTo
   - setZoom
+  - geocodePlace
+  - addLayer
 prompt: |
   When the user wants to navigate the map or find a location:
-  1. Use getMapCenter() to check current position if needed
-  2. Use zoomTo(lat, lon, zoom) to move the map to specific coordinates
-  3. Use setZoom(level) to change zoom level
-  4. Use getCurrentZoom() to check current zoom
-  5. Use getMapExtent() to understand current view bounds
+  1. If the user asks to find a place, address, street, or municipality in Spain, use geocodePlace(q="<query>"). It returns a GeoJSON URL and name. Then call addLayer(type='GeoJSON', url='<url>', name='<name>', fit=true) to load it and auto-zoom to its extent in one step.
+  2. Use zoomTo(lat, lon, zoom) to move to specific coordinates (EPSG:4326 by default, auto-transformed to map SRS).
+  3. Use zoomToExtent(minLon, minLat, maxLon, maxLat) to zoom to any bounding box (EPSG:4326, auto-transformed).
+  4. Use setZoom(level) to change zoom level.
+  5. Use getMapCenter() to check current position.
+  6. Use getCurrentZoom() to check current zoom.
+  7. Use getMapExtent() to understand current view bounds.
   Always confirm what you did after executing navigation tools.
