@@ -1,0 +1,26 @@
+{
+  "name": "zoomToExtent",
+  "description": "Zoom the map to fit a bounding box. Use this after geocoding a place to focus the view on its full extent. Coordinates are in EPSG:4326 and will be transformed to the map's SRS automatically.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "minLon": {
+        "type": "number",
+        "description": "Minimum longitude (west) in EPSG:4326"
+      },
+      "minLat": {
+        "type": "number",
+        "description": "Minimum latitude (south) in EPSG:4326"
+      },
+      "maxLon": {
+        "type": "number",
+        "description": "Maximum longitude (east) in EPSG:4326"
+      },
+      "maxLat": {
+        "type": "number",
+        "description": "Maximum latitude (north) in EPSG:4326"
+      }
+    },
+    "required": ["minLon", "minLat", "maxLon", "maxLat"]
+  }
+}

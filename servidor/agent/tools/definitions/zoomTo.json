@@ -1,20 +1,24 @@
 {
   "name": "zoomTo",
-  "description": "Move the map center to specific coordinates, optionally setting the zoom level.",
+  "description": "Move the map center to specific coordinates, optionally setting the zoom level. Coordinates are assumed to be in EPSG:4326 (WGS84 lat/lon) by default. Use 'srs' to specify a different SRS if needed.",
   "parameters": {
     "type": "object",
     "properties": {
       "lat": {
         "type": "number",
-        "description": "Latitude of the target location"
+        "description": "Latitude (Y coordinate) in EPSG:4326 by default"
       },
       "lon": {
         "type": "number",
-        "description": "Longitude of the target location"
+        "description": "Longitude (X coordinate) in EPSG:4326 by default"
       },
       "zoom": {
         "type": "integer",
         "description": "Optional zoom level to set"
+      },
+      "srs": {
+        "type": "string",
+        "description": "Source SRS of the coordinates (default: 'EPSG:4326'). The map will transform them to its own projection."
       }
     },
     "required": ["lat", "lon"]

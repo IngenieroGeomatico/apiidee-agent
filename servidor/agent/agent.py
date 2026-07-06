@@ -16,6 +16,7 @@ from .prompts import SYSTEM_PROMPT
 from .rag.retriever import retrieve_context
 from .skills.base import SkillRegistry
 from .tools.registry import get_langchain_tools
+from .tools.executors import has_executor, get_executor
 
 logger = logging.getLogger(__name__)
 
@@ -119,42 +120,80 @@ class Agent:
             if not response.has_tool_calls:
                 return self._build_response(response, rag_results)
 
+            server_calls = [
+                tc for tc in response.tool_calls
+                if has_executor(tc["name"])
+            ]
             mcp_calls = [
                 tc for tc in response.tool_calls
-                if self.mcp_manager and self.mcp_manager.is_mcp_tool(tc["name"])
+                if not has_executor(tc["name"])
+                and self.mcp_manager and self.mcp_manager.is_mcp_tool(tc["name"])
             ]
             map_calls = [
                 tc for tc in response.tool_calls
-                if not (self.mcp_manager and self.mcp_manager.is_mcp_tool(tc["name"]))
+                if not has_executor(tc["name"])
+                and not (self.mcp_manager and self.mcp_manager.is_mcp_tool(tc["name"]))
             ]
 
-            if not mcp_calls:
+            if server_calls or mcp_calls:
+                for tc in server_calls:
+                    try:
+                        executor = get_executor(tc["name"])
+                        result = executor(**tc["args"])
+                        formatted = json.dumps(
+                            {"result": result}, ensure_ascii=False
+                        ) if not isinstance(result, str) else result
+                        logger.info("Server tool '%s' executed successfully", tc["name"])
+                    except Exception as e:
+                        logger.exception("Server tool '%s' failed", tc["name"])
+                        formatted = json.dumps({"error": str(e)}, ensure_ascii=False)
+
+                    llm_messages.append({
+                        "role": "assistant",
+                        "content": response.content or "",
+                        "tool_calls": [tc],
+                    })
+                    llm_messages.append({
+                        "role": "tool",
+                        "content": formatted,
+                        "tool_call_id": tc["id"],
+                    })
+
+                for tc in mcp_calls:
+                    try:
+                        result = self.mcp_manager.execute_tool(tc["name"], tc["args"])
+                        formatted = self._format_mcp_result(result)
+                        logger.info("MCP tool '%s' executed successfully", tc["name"])
+                    except Exception as e:
+                        logger.exception("MCP tool '%s' failed", tc["name"])
+                        formatted = json.dumps({"error": str(e)}, ensure_ascii=False)
+
+                    llm_messages.append({
+                        "role": "assistant",
+                        "content": response.content or "",
+                        "tool_calls": [tc],
+                    })
+                    llm_messages.append({
+                        "role": "tool",
+                        "content": formatted,
+                        "tool_call_id": tc["id"],
+                    })
+
+                # If there are also map calls, return them so the frontend can execute them
+                if map_calls:
+                    return AgentResponse(
+                        content=response.content or "Ejecutando acción en el mapa...",
+                        response_type="tool_call",
+                        tool_calls=map_calls,
+                        sources=[chunk["metadata"] for chunk in rag_results] if rag_results else [],
+                    )
+            else:
                 return AgentResponse(
                     content=response.content or "Ejecutando acción en el mapa...",
                     response_type="tool_call",
                     tool_calls=map_calls,
                     sources=[chunk["metadata"] for chunk in rag_results] if rag_results else [],
                 )
-
-            for tc in mcp_calls:
-                try:
-                    result = self.mcp_manager.execute_tool(tc["name"], tc["args"])
-                    formatted = self._format_mcp_result(result)
-                    logger.info("MCP tool '%s' executed successfully", tc["name"])
-                except Exception as e:
-                    logger.exception("MCP tool '%s' failed", tc["name"])
-                    formatted = json.dumps({"error": str(e)}, ensure_ascii=False)
-
-                llm_messages.append({
-                    "role": "assistant",
-                    "content": response.content or "",
-                    "tool_calls": [tc],
-                })
-                llm_messages.append({
-                    "role": "tool",
-                    "content": formatted,
-                    "tool_call_id": tc["id"],
-                })
 
         logger.warning("MCP iteration limit (%d) reached", max_iterations)
         return AgentResponse(

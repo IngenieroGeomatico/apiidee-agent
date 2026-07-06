@@ -1,0 +1,26 @@
+{
+  "name": "geocodePlace",
+  "description": "Cartociudad geocoder (official Spanish geographic geocoder). Use q='Madrid' to get candidates with find URLs. Show as clickable DIV list. When user picks one, they send 'ADD LAYER: url | name'. Call addLayer(type='GEOJSON', url=url, name=name, fit=true). Do NOT call this tool again.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "q": {
+        "type": "string",
+        "description": "Free text search query: address, street name, place name, municipality, postal code, or reference cadastral. Examples: 'Calle Mayor 5, Madrid', 'Plaza España 1, Sevilla', 'Madrid', '28001'. When using id+type this should be the address string (e.g. 'Madrid, Madrid')."
+      },
+      "id": {
+        "type": "string",
+        "description": "Specific entity ID from a previous candidates search (optional). Used together with 'type' for precise geocoding."
+      },
+      "type": {
+        "type": "string",
+        "description": "Entity type when using specific id (optional): 'callejero', 'portal', 'carreteras', 'municipio', 'provincia', 'poblacion', 'toponimo', 'refcatastral'"
+      },
+      "portal": {
+        "type": "string",
+        "description": "Portal or kilometre point number when using specific id+type (optional)"
+      }
+    },
+    "required": []
+  }
+}
