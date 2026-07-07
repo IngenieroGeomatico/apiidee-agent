@@ -182,10 +182,21 @@ class ConversationViewSet(
         return _assistant_response(conversation, result)
 
 
-def _build_history(conversation) -> list:
-    """Convert conversation messages to list of dicts for the Agent."""
+_MAX_HISTORY_MESSAGES = 50
+
+def _build_history(conversation, max_messages: int = _MAX_HISTORY_MESSAGES) -> list:
+    """Convierte los mensajes de la conversación a una lista de dicts para el Agent.
+
+    Sólo se incluyen los últimos *max_messages* mensajes para evitar
+    exceder la ventana de contexto del LLM en conversaciones largas.
+    """
+    qs = conversation.messages.all()
+    total = qs.count()
+    if total > max_messages:
+        qs = qs[total - max_messages:]
+
     messages = []
-    for msg in conversation.messages.all():
+    for msg in qs:
         m = {"role": msg.role, "content": msg.content}
         if msg.metadata.get("tool_calls"):
             m["tool_calls"] = msg.metadata["tool_calls"]
@@ -195,10 +206,21 @@ def _build_history(conversation) -> list:
         messages.append(m)
     return messages
 
+_agent_cache: dict = {}
 
 def _make_agent(provider_name, model, api_key):
-    """Crea un agente con los parámetros opcionales de proveedor, modelo y API key."""
-    return Agent(provider_name=provider_name, model=model, api_key=api_key)
+    """Devuelve un Agent cacheado para esta combinación de proveedor/modelo/key.
+
+    Los Agents no guardan estado entre peticiones, por lo que se pueden
+    reutilizar. El caché evita recrear los objetos del proveedor LLM
+    en cada petición HTTP.
+    """
+    cache_key = (provider_name, model, api_key)
+    agent = _agent_cache.get(cache_key)
+    if agent is None:
+        agent = Agent(provider_name=provider_name, model=model, api_key=api_key)
+        _agent_cache[cache_key] = agent
+    return agent
 
 
 def _assistant_response(conversation, result, extra=None):
