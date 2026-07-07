@@ -18,9 +18,8 @@ class AgentResponseDefaultsTest(TestCase):
 
     def test_inicializacion_defaults(self):
         """AgentResponse sin argumentos opcionales usa listas vacías y type='text'."""
-        resp = AgentResponse(content="Hola")
-        self.assertEqual(resp.content, "Hola")
-        self.assertEqual(resp.type, "text")
+        resp = AgentResponse.text("Hola")
+        self.assertEqual(resp.content, [{"type": "text", "text": "Hola"}])
         self.assertEqual(resp.tool_calls, [])
         self.assertEqual(resp.sources, [])
 
@@ -31,15 +30,15 @@ class AgentResponseConToolCallsTest(TestCase):
     def test_con_tool_calls(self):
         """AgentResponse con tool_calls debe almacenarlos y marcar type='tool_call'."""
         tc = [{"name": "zoomTo", "args": {"lat": 40.4}, "id": "tc1"}]
-        resp = AgentResponse(
-            content="Moviendo...",
-            response_type="tool_call",
+        resp = AgentResponse.tool_call(
+            text="Moviendo...",
             tool_calls=tc,
             sources=[{"source": "file.py"}],
         )
-        self.assertEqual(resp.type, "tool_call")
-        self.assertEqual(len(resp.tool_calls), 1)
-        self.assertEqual(resp.tool_calls[0]["name"], "zoomTo")
+        # Verify that a tool_call block is present
+        tool_blocks = [b for b in resp.content if b.get("type") == "tool_call"]
+        self.assertEqual(len(tool_blocks), 1)
+        self.assertEqual(tool_blocks[0]["toolCalls"], tc)
         self.assertEqual(resp.sources, [{"source": "file.py"}])
 
 

@@ -1,11 +1,11 @@
 """
-Tool Registry — Auto-discovers tool definitions from JSON files.
+Registro de Herramientas — Descubre automáticamente definiciones de herramientas desde archivos JSON.
 
-Tools are defined as JSON files in tools/definitions/*.json.
-Each file contains: name, description, and parameters (JSON Schema).
+Las herramientas se definen como archivos JSON en tools/definitions/*.json.
+Cada archivo contiene: name, description y parameters (JSON Schema).
 
-To add a new tool: create a new .json file in tools/definitions/.
-No Python code changes needed.
+Para añadir una nueva herramienta: crea un nuevo archivo .json en tools/definitions/.
+No se necesitan cambios en código Python.
 """
 import json
 import logging
@@ -21,7 +21,7 @@ DEFINITIONS_DIR = Path(__file__).resolve().parent / "definitions"
 
 
 def _load_definitions():
-    """Scan definitions/ directory and load all .json tool files."""
+    """Escanea el directorio definitions/ y carga todos los archivos .json de herramientas."""
     global _loaded
     if _loaded:
         return
@@ -56,7 +56,7 @@ def _load_definitions():
 
 
 def register_tool(name: str, description: str, parameters: dict):
-    """Register a tool programmatically (for custom tools not defined in JSON)."""
+    """Registra una herramienta programáticamente (para herramientas personalizadas no definidas en JSON)."""
     _tools_registry[name] = {
         "name": name,
         "description": description,
@@ -77,7 +77,7 @@ def get_tool_by_name(name: str) -> Optional[dict]:
 
 
 def register_mcp_tools():
-    """Register all tools from MCP servers into the tool registry."""
+    """Registra todas las herramientas de servidores MCP en el registro de herramientas."""
     from agent.mcp.manager import MCPServerManager
 
     manager = MCPServerManager.get_instance()
@@ -100,7 +100,7 @@ def register_mcp_tools():
 
 
 def get_langchain_tools():
-    """Convert registered tools to LangChain tool format for bind_tools()."""
+    """Convierte las herramientas registradas al formato de herramientas LangChain para bind_tools()."""
     _load_definitions()
     tools = []
     for t in _tools_registry.values():

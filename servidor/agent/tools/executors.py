@@ -1,16 +1,17 @@
 """
-Tool Executors — Server-side handlers for tools that run on the backend
-instead of the frontend.
+Ejecutores de Herramientas — Manejadores del lado del servidor para herramientas
+que se ejecutan en el backend en lugar del frontend.
 
-Tools defined here execute in Python when called by the LLM, similar to
-MCP tools but without requiring an external MCP server.
+Las herramientas definidas aquí se ejecutan en Python cuando el LLM las llama,
+similar a las herramientas MCP pero sin requerir un servidor MCP externo.
 """
 import json
 import logging
 from typing import Any, Callable, Dict, Optional
 from urllib.request import Request, urlopen
+from urllib.parse import urlencode
 
-from html.parser import HTMLParser
+from agent.utils.html_parser import TextExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ _executors: Dict[str, Callable] = {}
 
 
 def register(name: str):
-    """Decorator to register a server-side tool executor."""
+    """Decorador para registrar un ejecutor de herramienta del lado del servidor."""
     def wrapper(fn: Callable):
         _executors[name] = fn
         return fn
@@ -26,43 +27,13 @@ def register(name: str):
 
 
 def get_executor(name: str) -> Optional[Callable]:
-    """Get the executor function for a tool name."""
+    """Obtiene la función ejecutora para un nombre de herramienta."""
     return _executors.get(name)
 
 
 def has_executor(name: str) -> bool:
-    """Check if a tool has a server-side executor."""
+    """Verifica si una herramienta tiene un ejecutor del lado del servidor."""
     return name in _executors
-
-
-class _TextExtractor(HTMLParser):
-    """Extrae texto plano de HTML, ignorando script/style/nav/footer/header.
-
-    Usa un contador de profundidad en vez de un booleano para que los tags
-    anidados (p.ej. ``<nav><footer>...</footer></nav>``) se manejen correctamente.
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.text_parts = []
-        self._skip_depth = 0
-        self._skip_tags = {'script', 'style', 'nav', 'footer', 'header'}
-
-    def handle_starttag(self, tag, attrs):
-        if tag in self._skip_tags:
-            self._skip_depth += 1
-        if tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
-            self.text_parts.append('\n' + '#' * int(tag[1]) + ' ')
-        if tag in ('p', 'div', 'li', 'br', 'tr', 'td', 'th', 'section'):
-            self.text_parts.append('\n')
-
-    def handle_endtag(self, tag):
-        if tag in self._skip_tags and self._skip_depth > 0:
-            self._skip_depth -= 1
-
-    def handle_data(self, data):
-        if self._skip_depth == 0:
-            self.text_parts.append(data)
 
 
 @register("fetchWebPage")
@@ -75,7 +46,7 @@ def fetch_web_page(url: str, **kwargs) -> str:
             return resp.read().decode('utf-8', errors='ignore')[:50000]
         html = resp.read().decode('utf-8', errors='ignore')
 
-    parser = _TextExtractor()
+    parser = TextExtractor()
     parser.feed(html)
     text = ''.join(parser.text_parts)
 
@@ -84,10 +55,69 @@ def fetch_web_page(url: str, **kwargs) -> str:
     return text[:50000]
 
 
+def _geo_find_url(params: dict) -> str:
+    return "https://www.cartociudad.es/geocoder/api/geocoder/find?" + urlencode(params)
+
+
+def _geo_candidates_url(q: str) -> str:
+    params = {"q": q, "limit": "33", "no_process": "expendeduria",
+              "countrycode": "es", "autocancel": "true"}
+    return "https://www.cartociudad.es/geocoder/api/geocoder/candidates?" + urlencode(params)
+
+
+def _add_layer_instruction(url: str, name: str) -> str:
+    safe = json.dumps(name, ensure_ascii=False)
+    return f"Call addLayer(type='GEOJSON', url=\"{url}\", name={safe}, fit=true)"
+
+
+def _format_candidate(idx: int, c: dict) -> str:
+    addr = c.get("address", "")
+    ctype = c.get("type", "")
+    muni = c.get("muni", "")
+    cid = c.get("id", "")
+    lat = c.get("lat", 0)
+    lng = c.get("lng", 0)
+    coords_str = f"lat={lat}, lon={lng}" if lat and lng and float(lat) != 0 and float(lng) != 0 else ""
+    find_params = {"id": cid, "type": ctype, "outputformat": "geoJson"}
+    if addr:
+        find_params["q"] = addr
+    url = _geo_find_url(find_params)
+    parts = f"[{idx + 1}] {addr} — {ctype} — {muni}"
+    if coords_str:
+        parts += f" ({coords_str})"
+    parts += f"\n    url={url}"
+    return parts
+
+
+_CANDIDATE_HTML_INSTRUCTIONS = (
+    "\nShow candidates as a clean numbered list."
+    "\nEach candidate is a clickable DIV:"
+    "\n<div class=\"candidate-btn\" onclick=\"window.chatagentQuickReply('ADD LAYER: url | name')\">N. ADDR <span class=\"candidate-meta\">CTYPE — MUNI</span></div>"
+    "\nReplace url, ADDR, CTYPE, MUNI, N with actual values."
+    "\nAfter showing the list, ask: \u00bfCu\u00e1l quieres cargar en el mapa?"
+    "\nWhen user sends 'ADD LAYER: url | name', extract the url and name and call addLayer(type='GEOJSON', url=url, name=name, fit=true)."
+    "\nDo NOT call geocodePlace again."
+)
+
+
+def _fetch_candidates(url: str) -> list | None:
+    try:
+        req = Request(url, headers={"User-Agent": "APIIDEEAgent/1.0"})
+        with urlopen(req, timeout=15) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+        data = json.loads(raw)
+        if isinstance(data, list) and data:
+            return data[:10]
+        return None
+    except Exception as exc:
+        logger.warning("Candidates lookup failed: %s", exc)
+        return None
+
+
 @register("geocodePlace")
 def geocode_place(q: str = "", id: str = "", type: str = "",
-                  portal: str = "", **kwargs) -> str:
-    """Search for a place using the Cartociudad geocoder and return its geometry."""
+                  portal: str = "", **kwargs) -> dict:
+    """Busca un lugar con el geocoder de Cartociudad y devuelve su geometría."""
     from urllib.parse import urlencode
     import json as json_module
 
@@ -99,84 +129,34 @@ def geocode_place(q: str = "", id: str = "", type: str = "",
             params["q"] = q
         if portal:
             params["portal"] = portal
-        find_q = q or id
-    else:
-        params = {"q": q, "outputformat": "geoJson"}
-        find_q = q
+        geojson_url = _geo_find_url(params)
+        name = q or id
+        # Return structured result with URL and name
+        return {"geojsonURL": geojson_url, "name": name}
 
-    geojson_url = "https://www.cartociudad.es/geocoder/api/geocoder/find?" + urlencode(params)
-    logger.info("Cartociudad find URL: %s", geojson_url)
+    find_q = q
+    geojson_url = _geo_find_url({"q": q, "outputformat": "geoJson"})
+    candidates_url = _geo_candidates_url(find_q)
+    candidates = _fetch_candidates(candidates_url)
 
-    # When called with id+type, skip candidates and go straight to result
-    if id and type:
-        safe_name = json_module.dumps(q or id, ensure_ascii=False)
-        return (
-            f"GeoJSON URL for candidate {safe_name}:"
-            f"\n{geojson_url}"
-            f"\nCall addLayer(type='GEOJSON', url=\"{geojson_url}\", name={safe_name}, fit=true)"
-        )
-
-    # Free-text search: get candidates
-    candidates_params = {
-        "q": find_q,
-        "limit": "33",
-        "no_process": "expendeduria",
-        "countrycode": "es",
-        "autocancel": "true",
-    }
-    candidates_url = "https://www.cartociudad.es/geocoder/api/geocoder/candidates?" + urlencode(candidates_params)
-    try:
-        req = Request(candidates_url, headers={"User-Agent": "APIIDEEAgent/1.0"})
-        with urlopen(req, timeout=15) as resp:
-            candidates_raw = resp.read().decode("utf-8", errors="ignore")
-        candidates_data = json_module.loads(candidates_raw)
-        if isinstance(candidates_data, list) and candidates_data:
-            lines = []
-            for idx, c in enumerate(candidates_data[:10]):
-                addr = c.get("address", q)
-                ctype = c.get("type", "")
-                muni = c.get("muni", "")
-                cid = c.get("id", "")
-                lat = c.get("lat", 0)
-                lng = c.get("lng", 0)
-                find_params = {"id": cid, "type": ctype, "outputformat": "geoJson"}
-                if addr:
-                    find_params["q"] = addr
-                candidate_find_url = "https://www.cartociudad.es/geocoder/api/geocoder/find?" + urlencode(find_params)
-                coords = f"lat={lat}, lon={lng}" if lat and lng and float(lat) != 0 and float(lng) != 0 else ""
-                lines.append(
-                    f"[{idx+1}] {addr} — {ctype} — {muni}"
-                    + (f" ({coords})" if coords else "")
-                    + f"\n    url={candidate_find_url}"
-                )
-            summary = (
-                f"Candidates for {json_module.dumps(q, ensure_ascii=False)}:\n"
+    if candidates is not None:
+        lines = [_format_candidate(i, c) for i, c in enumerate(candidates)]
+        return (f"Candidates for {json.dumps(q, ensure_ascii=False)}:\n"
                 + "\n".join(lines)
-                + "\n\nShow candidates as a clean numbered list."
-                + "\nEach candidate is a clickable DIV:"
-                + '\n<div class="candidate-btn" onclick="window.chatagentQuickReply(\'ADD LAYER: candidate_find_url | ADDR (CTYPE)\')">NÚMERO. ADDR <span class="candidate-meta">CTYPE — MUNI</span></div>'
-                + "\nReplace candidate_find_url, ADDR, CTYPE, MUNI, NÚMERO with actual values."
-                + "\n\nAfter showing the list, ask: ¿Cuál quieres cargar en el mapa?"
-                + "\nWhen user sends 'ADD LAYER: url | name', extract the url and name and call addLayer(type='GEOJSON', url=url, name=name, fit=true)."
-                + "\nDo NOT call geocodePlace again."
-            )
-        else:
-            summary = f"No candidates found for: {q}\nGeoJSON URL: {geojson_url}"
-            summary += f"\nCall addLayer(type='GEOJSON', url=\"{geojson_url}\", name={json_module.dumps(q, ensure_ascii=False)}, fit=true)"
-    except Exception as e:
-        logger.warning("Candidates lookup failed: %s", e)
-        summary = f"Search for: {q}\nGeoJSON URL: {geojson_url}"
-        summary += f"\nCall addLayer(type='GEOJSON', url=\"{geojson_url}\", name={json_module.dumps(q, ensure_ascii=False)}, fit=true)"
+                + _CANDIDATE_HTML_INSTRUCTIONS)
 
-    return summary
+    safe_q = json.dumps(q, ensure_ascii=False)
+    fallback_msg = f"No candidates found for: {q}"
+    # Return fallback with GeoJSON URL
+    return {"geojsonURL": geojson_url, "name": q, "message": fallback_msg}
 
 
-# ────────────────────────────── IDEE Service Directory ──────────────────────────────
+# ────────────────────────────── Directorio de Servicios IDEE ──────────────────────────────
 
 _IDEE_PORTLET = "es_igncnig_dirserv72_DirectorioServiciosPortlet_INSTANCE_YZFuNrhnVi4f"
 _IDEE_BASE = "https://www.idee.es/web/idee/segun-tipo-de-servicio"
 
-# Category ID → addLayer type mapping
+# ID de categoría → mapeo de tipo addLayer
 _IDEE_CATEGORIES = [
     ("sup-vis-rts", "TMS",     "XYZ de Teselas ráster"),
     ("sup-vis-vts", "MVT",     "Teselas vectoriales"),
@@ -250,7 +230,7 @@ def search_idee_service(query: str, **kwargs) -> str:
             ensure_ascii=False,
         )
 
-    # Deduplicate by URL
+    # Desduplicar por URL
     seen = set()
     deduped = []
     for r in results:
@@ -300,6 +280,17 @@ def list_detectors_tool(**kwargs) -> str:
     return "\n".join(lines)
 
 
+_pending_detection_geojson = None
+
+
+def pop_pending_detection_geojson() -> dict | None:
+    """Obtiene el último GeoJSON de detección y lo limpia."""
+    global _pending_detection_geojson
+    result = _pending_detection_geojson
+    _pending_detection_geojson = None
+    return result
+
+
 @register("detectObjects")
 def detect_objects_tool(detector: str, bbox: dict, srs: str = "EPSG:3857",
                         wms_url: str = None, wms_layer: str = None,
@@ -307,10 +298,22 @@ def detect_objects_tool(detector: str, bbox: dict, srs: str = "EPSG:3857",
     """Ejecuta un detector ML sobre la zona indicada y devuelve GeoJSON."""
     from agent.ml.inference import run_detection
 
-    return run_detection(
+    result = run_detection(
         detector_name=detector,
         bbox=bbox,
         srs=srs,
         wms_url=wms_url,
         wms_layer=wms_layer,
     )
+
+    global _pending_detection_geojson
+    try:
+        parsed = json.loads(result)
+        if isinstance(parsed, dict) and parsed.get("type") == "FeatureCollection":
+            _pending_detection_geojson = parsed
+        else:
+            _pending_detection_geojson = None
+    except Exception:
+        _pending_detection_geojson = None
+
+    return result

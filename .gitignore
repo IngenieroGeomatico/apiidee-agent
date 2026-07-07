@@ -44,6 +44,7 @@ servidor/ml_models/*.pth
 servidor/ml_models/*.tflite
 servidor/ml_models/*.h5
 servidor/ml_models/*.pb
+servidor/ml_models/tmp/
 
 # IDE
 .vscode/

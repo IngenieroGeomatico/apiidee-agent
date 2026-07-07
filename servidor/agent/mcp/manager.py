@@ -9,9 +9,9 @@ logger = logging.getLogger(__name__)
 
 
 class MCPServerManager:
-    """Manages multiple MCP server connections as a singleton.
+    """Gestiona múltiples conexiones de servidores MCP como singleton.
 
-    Initialized once at Django startup via apps.py.
+    Inicializado una vez al inicio de Django mediante apps.py.
     """
 
     _instance: Optional["MCPServerManager"] = None
@@ -22,7 +22,7 @@ class MCPServerManager:
 
     @classmethod
     def initialize(cls, config_path: Optional[Path] = None) -> "MCPServerManager":
-        """Initialize (or return existing) singleton with server config."""
+        """Inicializa (o devuelve el existente) singleton con la configuración del servidor."""
         if cls._instance is not None:
             return cls._instance
 
@@ -59,7 +59,7 @@ class MCPServerManager:
         return cls._instance
 
     def get_all_tools(self) -> List[dict]:
-        """Return all tools from all servers in standard format."""
+        """Devuelve todas las herramientas de todos los servidores en formato estándar."""
         tools = []
         for client in self.servers.values():
             try:
@@ -77,7 +77,7 @@ class MCPServerManager:
         return tools
 
     def execute_tool(self, tool_name: str, arguments: dict) -> Any:
-        """Execute a tool on the appropriate MCP server."""
+        """Ejecuta una herramienta en el servidor MCP correspondiente."""
         if tool_name not in self._mcp_tool_names:
             raise ValueError(f"Tool '{tool_name}' is not an MCP tool")
 
@@ -96,9 +96,9 @@ class MCPServerManager:
         )
 
     def is_mcp_tool(self, tool_name: str) -> bool:
-        """Check if a tool name is provided by any MCP server."""
+        """Comprueba si un nombre de herramienta es proporcionado por algún servidor MCP."""
         return tool_name in self._mcp_tool_names
 
     def is_connected(self) -> bool:
-        """Whether at least one MCP server is connected."""
+        """Indica si al menos un servidor MCP está conectado."""
         return len(self.servers) > 0

@@ -1,55 +1,31 @@
 """
-Detector de piscinas — Ejemplo de detector ML sobre imágenes aéreas.
+Detector de piscinas sobre imágenes aéreas con ONNX.
 
-Este fichero sirve como plantilla para integrar un modelo real de detección.
-Actualmente contiene un placeholder que genera detecciones ficticias para
-verificar que el pipeline completo funciona (WMS → modelo → GeoJSON → mapa).
-
-Para integrar un modelo real:
-  1. Exportar el modelo a ONNX (recomendado) o el formato que prefieras
-  2. Colocar los pesos en ``servidor/ml_models/pool_detector.onnx``
-  3. Reemplazar el método ``detect()`` con la inferencia real
-  4. Ajustar ``_load_model()`` para cargar el formato correcto
-
-Formatos soportados (ejemplos de carga):
-
-    # ONNX (recomendado — ligero, sin PyTorch/TF)
-    import onnxruntime as ort
-    session = ort.InferenceSession("servidor/ml_models/pool_detector.onnx")
-
-    # YOLOv8 (ultralytics)
-    from ultralytics import YOLO
-    model = YOLO("servidor/ml_models/pool_detector.pt")
-
-    # PyTorch
-    import torch
-    model = torch.load("servidor/ml_models/pool_detector.pt")
-
-    # TensorFlow Lite
-    import tflite_runtime.interpreter as tflite
-    interpreter = tflite.Interpreter("servidor/ml_models/pool_detector.tflite")
+Usa un modelo YOLOv8n exportado a ONNX (~6 MB) para detección de objetos
+y filtra las detecciones por color/forma para identificar piscinas.
+Corre con onnxruntime (sin PyTorch, sin ultralytics).
 """
 import logging
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
+
+import numpy as np
 
 from agent.ml.base import BaseDetector
 from agent.ml.registry import detector
 
 logger = logging.getLogger(__name__)
 
-# Ruta donde se esperan los pesos del modelo
 _MODEL_DIR = Path(__file__).resolve().parent.parent.parent.parent / "ml_models"
 _MODEL_PATH = _MODEL_DIR / "pool_detector.onnx"
+
+_CONFIDENCE_THRESHOLD = 0.25
+_IOU_THRESHOLD = 0.45
+_INPUT_SIZE = 640
 
 
 @detector
 class PoolDetector(BaseDetector):
-    """Detecta piscinas en imágenes aéreas/satélite.
-
-    Cuando el modelo real esté disponible, reemplazar ``_load_model()``
-    y ``detect()`` con la lógica de inferencia correspondiente.
-    """
 
     @property
     def name(self) -> str:
@@ -68,103 +44,217 @@ class PoolDetector(BaseDetector):
         )
 
     def __init__(self):
-        """Carga el modelo una sola vez. Si no existe, funciona en modo demo."""
         self.model = self._load_model()
 
     def _load_model(self):
-        """Carga los pesos del modelo desde disco.
-
-        Devuelve None si el fichero no existe (modo demo con detecciones
-        ficticias para probar el pipeline).
-        """
         if not _MODEL_PATH.exists():
             logger.warning(
-                "Modelo de piscinas no encontrado en %s. "
-                "Funcionando en modo demo (detecciones ficticias). "
-                "Coloca el modelo en esa ruta para activar la detección real.",
+                "Modelo ONNX no encontrado en %s. "
+                "Ejecuta: python scripts/download_pool_model.py",
                 _MODEL_PATH,
             )
             return None
-
-        # ── Descomentar según el formato del modelo ──────────────────
-        #
-        # ONNX:
-        # import onnxruntime as ort
-        # return ort.InferenceSession(str(_MODEL_PATH))
-        #
-        # YOLOv8:
-        # from ultralytics import YOLO
-        # return YOLO(str(_MODEL_PATH))
-        #
-        # PyTorch:
-        # import torch
-        # return torch.load(str(_MODEL_PATH), map_location="cpu")
-        # ─────────────────────────────────────────────────────────────
-
-        logger.info("Modelo de piscinas cargado desde %s", _MODEL_PATH)
-        return None  # Reemplazar con la carga real
+        import onnxruntime as ort
+        session = ort.InferenceSession(
+            str(_MODEL_PATH),
+            providers=["CPUExecutionProvider"],
+        )
+        logger.info("Modelo ONNX cargado desde %s", _MODEL_PATH)
+        return session
 
     def detect(self, image: Any, bbox: Dict, srs: str = "EPSG:3857") -> Dict:
-        """Ejecuta la detección de piscinas sobre la imagen.
-
-        Args:
-            image: Imagen PIL.Image.Image en modo RGB.
-            bbox: Extensión geográfica ``{minX, minY, maxX, maxY}``.
-            srs: Sistema de referencia del bbox.
-
-        Returns:
-            GeoJSON FeatureCollection con los polígonos detectados.
-        """
         if self.model is None:
-            return self._demo_detection(bbox, srs)
+            geojson = self._segment_pools_opencv(image, bbox, srs)
+            return self._reproject_geojson(geojson, srs)
 
-        # ── Inferencia real (reemplazar este bloque) ─────────────────
-        #
-        # Ejemplo con ONNX:
-        #   import numpy as np
-        #   img_array = np.array(image)
-        #   # Preprocesar según lo que espere el modelo
-        #   input_tensor = self._preprocess(img_array)
-        #   outputs = self.model.run(None, {"input": input_tensor})
-        #   detections = self._postprocess(outputs, bbox, srs)
-        #   return self._detections_to_geojson(detections, bbox, srs)
-        #
-        # Ejemplo con YOLOv8:
-        #   results = self.model(image)
-        #   return self._yolo_to_geojson(results, bbox, srs)
-        # ─────────────────────────────────────────────────────────────
+        img_array = np.array(image.convert("RGB"))
+        orig_h, orig_w = img_array.shape[:2]
 
-        return self._demo_detection(bbox, srs)
+        input_tensor, scale, pad = self._preprocess(img_array)
+        outputs = self.model.run(None, {self.model.get_inputs()[0].name: input_tensor})
+        boxes = self._postprocess(outputs[0], orig_w, orig_h, scale, pad)
 
-    def _demo_detection(self, bbox: Dict, srs: str) -> Dict:
-        """Genera detecciones ficticias para probar el pipeline sin modelo real.
+        if not boxes:
+            logger.info("ONNX sin detecciones, fallback a segmentación por color")
+            geojson = self._segment_pools_opencv(image, bbox, srs)
+            return self._reproject_geojson(geojson, srs)
 
-        Crea 3 'piscinas' distribuidas en el bbox para verificar que el
-        flujo completo funciona: WMS → detección → GeoJSON → mapa.
-        """
-        min_x, min_y = bbox["minX"], bbox["minY"]
-        max_x, max_y = bbox["maxX"], bbox["maxY"]
-        dx = (max_x - min_x) / 4
-        dy = (max_y - min_y) / 4
+        geojson = self._boxes_to_geojson(boxes, orig_w, orig_h, bbox, srs)
+        return self._reproject_geojson(geojson, srs)
 
+    # ── Preprocesado / Postprocesado YOLOv8 ONNX ────────────────────
+
+    def _preprocess(self, img: np.ndarray) -> Tuple[np.ndarray, float, Tuple[int, int]]:
+        h, w = img.shape[:2]
+        scale = min(_INPUT_SIZE / w, _INPUT_SIZE / h)
+        nw, nh = int(w * scale), int(h * scale)
+        from PIL import Image as PILImage
+        pil_img = PILImage.fromarray(img)
+        resized = np.array(pil_img.resize((nw, nh), PILImage.BILINEAR))
+        canvas = np.full((_INPUT_SIZE, _INPUT_SIZE, 3), 114, dtype=np.uint8)
+        pad_x = (_INPUT_SIZE - nw) // 2
+        pad_y = (_INPUT_SIZE - nh) // 2
+        canvas[pad_y:pad_y + nh, pad_x:pad_x + nw] = resized
+        input_tensor = canvas.transpose(2, 0, 1).astype(np.float32) / 255.0
+        input_tensor = input_tensor[np.newaxis, :]
+        return input_tensor, scale, (pad_x, pad_y)
+
+    def _postprocess(
+        self, output: np.ndarray, orig_w: int, orig_h: int,
+        scale: float, pad: Tuple[int, int],
+    ) -> List[Dict]:
+        output = output.squeeze()
+        if output.ndim == 2:
+            output = output.transpose()
+
+        boxes = []
+        for det in output:
+            scores = det[4:]
+            max_score = float(scores.max())
+            if max_score < _CONFIDENCE_THRESHOLD:
+                continue
+
+            cx, cy, w, h = float(det[0]), float(det[1]), float(det[2]), float(det[3])
+            x1 = (cx - w / 2 - pad[0]) / scale
+            y1 = (cy - h / 2 - pad[1]) / scale
+            x2 = (cx + w / 2 - pad[0]) / scale
+            y2 = (cy + h / 2 - pad[1]) / scale
+            x1 = max(0, x1)
+            y1 = max(0, y1)
+            x2 = min(orig_w, x2)
+            y2 = min(orig_h, y2)
+            if x2 - x1 < 2 or y2 - y1 < 2:
+                continue
+
+            boxes.append({
+                "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                "confidence": max_score,
+                "class_id": int(scores.argmax()),
+            })
+
+        boxes = self._nms(boxes)
+        return boxes
+
+    @staticmethod
+    def _nms(boxes: List[Dict]) -> List[Dict]:
+        if not boxes:
+            return []
+        boxes.sort(key=lambda b: b["confidence"], reverse=True)
+        keep = []
+        while boxes:
+            best = boxes.pop(0)
+            keep.append(best)
+            boxes = [b for b in boxes if PoolDetector._iou(b, best) < _IOU_THRESHOLD]
+        return keep
+
+    @staticmethod
+    def _iou(a: Dict, b: Dict) -> float:
+        x1, y1 = max(a["x1"], b["x1"]), max(a["y1"], b["y1"])
+        x2, y2 = min(a["x2"], b["x2"]), min(a["y2"], b["y2"])
+        inter = max(0, x2 - x1) * max(0, y2 - y1)
+        area_a = (a["x2"] - a["x1"]) * (a["y2"] - a["y1"])
+        area_b = (b["x2"] - b["x1"]) * (b["y2"] - b["y1"])
+        union = area_a + area_b - inter
+        return inter / union if union > 0 else 0
+
+    # ── Fallback: segmentación por color (OpenCV) ───────────────────
+
+    def _segment_pools_opencv(self, image: Any, bbox: Dict, srs: str) -> Dict:
+        import cv2
+        img = np.array(image.convert("RGB"))
+        hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+
+        lower_blue = np.array([85, 40, 40])
+        upper_blue = np.array([130, 255, 255])
+        mask = cv2.inRange(hsv, lower_blue, upper_blue)
+
+        kernel = np.ones((5, 5), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         features = []
-        demo_pools = [
-            (min_x + dx, min_y + dy, 0.95),
-            (min_x + 2 * dx, min_y + 2 * dy, 0.87),
-            (min_x + 3 * dx, min_y + 3 * dy, 0.78),
-        ]
+        img_area = img.shape[0] * img.shape[1]
 
-        pool_w = dx * 0.3
-        pool_h = dy * 0.2
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area < img_area * 0.004 or area > img_area * 0.4:
+                continue
 
-        for cx, cy, confidence in demo_pools:
-            polygon = [
-                [cx - pool_w, cy - pool_h],
-                [cx + pool_w, cy - pool_h],
-                [cx + pool_w, cy + pool_h],
-                [cx - pool_w, cy + pool_h],
-                [cx - pool_w, cy - pool_h],
+            peri = cv2.arcLength(cnt, True)
+            if peri == 0:
+                continue
+
+            x, y, w, h = cv2.boundingRect(cnt)
+            aspect = max(w, h) / (min(w, h) + 1)
+            if aspect > 4:
+                continue
+
+            hull = cv2.convexHull(cnt)
+            hull_area = cv2.contourArea(hull)
+            if hull_area == 0:
+                continue
+            solidity = area / hull_area
+            if solidity < 0.75:
+                continue
+
+            rect = cv2.minAreaRect(cnt)
+            rect_w, rect_h = rect[1]
+            if rect_w * rect_h == 0:
+                continue
+            rectangularity = area / (rect_w * rect_h)
+            if rectangularity < 0.3:
+                continue
+
+            circularity = 4 * np.pi * area / (peri * peri)
+            if circularity > 0.7:
+                continue
+
+            approx = cv2.approxPolyDP(cnt, 0.035 * peri, True)
+
+            geo_poly = [
+                PoolDetector._pixel_to_geo(pt[0][0], pt[0][1], img.shape[1], img.shape[0], bbox)
+                for pt in approx
             ]
+            if len(geo_poly) < 3:
+                continue
+            geo_poly.append(geo_poly[0])
+
+            size_score = min(1.0, area / (img_area * 0.05))
+            shape_score = rectangularity * 0.5 + solidity * 0.3
+            if circularity > 0.01:
+                shape_score += max(0, (0.55 - circularity) / 0.55) * 0.2
+
+            confidence = min(0.95, round(size_score * 0.4 + shape_score * 0.6, 3))
+            features.append({
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [geo_poly],
+                },
+                "properties": {
+                    "detector": self.name,
+                    "label": "Piscina",
+                    "model": "Segmentación por color (OpenCV)",
+                    "confidence": confidence,
+                },
+            })
+
+        logger.info(
+            "OpenCV: detectadas %d piscinas en bbox %s", len(features), bbox,
+        )
+        return {"type": "FeatureCollection", "features": features}
+
+    # ── Conversión a GeoJSON ────────────────────────────────────────
+
+    def _boxes_to_geojson(
+        self, boxes: List[Dict], img_w: int, img_h: int,
+        bbox: Dict, srs: str,
+    ) -> Dict:
+        features = []
+        for box in boxes:
+            x1, y1, x2, y2 = box["x1"], box["y1"], box["x2"], box["y2"]
+            polygon = self._bbox_to_polygon(x1, y1, x2, y2, img_w, img_h, bbox)
             features.append({
                 "type": "Feature",
                 "geometry": {
@@ -173,59 +263,89 @@ class PoolDetector(BaseDetector):
                 },
                 "properties": {
                     "detector": self.name,
-                    "label": "Piscina (demo)",
-                    "confidence": confidence,
+                    "label": "Piscina",
+                    "model": "YOLOv8n (ONNX)",
+                    "confidence": round(box["confidence"], 3),
                 },
             })
 
         logger.info(
-            "Modo demo: generadas %d detecciones ficticias en bbox %s",
-            len(features), bbox,
+            "ONNX: %d detecciones en bbox %s", len(features), bbox,
         )
+        return {"type": "FeatureCollection", "features": features}
 
-        return {
-            "type": "FeatureCollection",
-            "features": features,
-        }
+    # ── Reproyección GeoJSON → EPSG:4326 ───────────────────────────
 
-    # ── Helpers para cuando integres el modelo real ──────────────────
+    @staticmethod
+    def _reproject_geojson(geojson: Dict, from_srs: str) -> Dict:
+        if from_srs.upper() not in ("EPSG:4326", "EPSG:4269", "WGS84"):
+            features = geojson.get("features", [])
+            for feat in features:
+                geom = feat.get("geometry", {})
+                PoolDetector._reproject_geometry(geom, from_srs)
+
+        return geojson
+
+    @staticmethod
+    def _reproject_geometry(geom: Dict, from_srs: str):
+        gtype = geom.get("type", "")
+        coords = geom.get("coordinates", [])
+
+        if gtype == "Polygon":
+            geom["coordinates"] = [
+                [PoolDetector._to_wgs84(x, y, from_srs) for x, y in ring]
+                for ring in coords
+            ]
+        elif gtype == "MultiPolygon":
+            geom["coordinates"] = [
+                [[PoolDetector._to_wgs84(x, y, from_srs) for x, y in ring] for ring in poly]
+                for poly in coords
+            ]
+        elif gtype == "Point":
+            if len(coords) >= 2:
+                geom["coordinates"] = PoolDetector._to_wgs84(coords[0], coords[1], from_srs)
+        elif gtype == "MultiPoint" or gtype == "LineString":
+            geom["coordinates"] = [PoolDetector._to_wgs84(x, y, from_srs) for x, y in coords]
+        elif gtype == "MultiLineString":
+            geom["coordinates"] = [
+                [PoolDetector._to_wgs84(x, y, from_srs) for x, y in segment]
+                for segment in coords
+            ]
+
+    _transformer_cache: Dict[str, Any] = {}
+
+    @classmethod
+    def _get_transformer(cls, from_srs: str) -> Any:
+        key = from_srs.upper()
+        if key not in cls._transformer_cache:
+            from pyproj import Transformer
+            cls._transformer_cache[key] = Transformer.from_crs(from_srs, "EPSG:4326", always_xy=True)
+        return cls._transformer_cache[key]
+
+    @classmethod
+    def _to_wgs84(cls, x: float, y: float, from_srs: str) -> list:
+        if from_srs.upper() in ("EPSG:4326", "EPSG:4269", "WGS84"):
+            return [x, y]
+        tx = cls._get_transformer(from_srs)
+        lon, lat = tx.transform(x, y)
+        return [lon, lat]
+
+    # ── Helpers ─────────────────────────────────────────────────────
 
     @staticmethod
     def _pixel_to_geo(px: float, py: float, img_w: int, img_h: int,
-                      bbox: Dict) -> tuple:
-        """Convierte coordenadas píxel a coordenadas geográficas.
-
-        Args:
-            px, py: Posición en píxeles (origen arriba-izquierda).
-            img_w, img_h: Dimensiones de la imagen.
-            bbox: Extensión geográfica de la imagen.
-
-        Returns:
-            Tupla (x_geo, y_geo) en el SRS del bbox.
-        """
+                      bbox: Dict) -> list:
         x_geo = bbox["minX"] + (px / img_w) * (bbox["maxX"] - bbox["minX"])
         y_geo = bbox["maxY"] - (py / img_h) * (bbox["maxY"] - bbox["minY"])
-        return x_geo, y_geo
+        return [x_geo, y_geo]
 
     @staticmethod
     def _bbox_to_polygon(x1: float, y1: float, x2: float, y2: float,
                          img_w: int, img_h: int, bbox: Dict) -> List:
-        """Convierte un bounding box en píxeles a un polígono GeoJSON.
-
-        Args:
-            x1, y1, x2, y2: Coordenadas del bbox en píxeles.
-            img_w, img_h: Dimensiones de la imagen.
-            bbox: Extensión geográfica.
-
-        Returns:
-            Lista de coordenadas para un polígono GeoJSON (anillo cerrado).
-        """
-        geo_x1, geo_y1 = PoolDetector._pixel_to_geo(x1, y1, img_w, img_h, bbox)
-        geo_x2, geo_y2 = PoolDetector._pixel_to_geo(x2, y2, img_w, img_h, bbox)
         return [
-            [geo_x1, geo_y1],
-            [geo_x2, geo_y1],
-            [geo_x2, geo_y2],
-            [geo_x1, geo_y2],
-            [geo_x1, geo_y1],
+            PoolDetector._pixel_to_geo(x1, y1, img_w, img_h, bbox),
+            PoolDetector._pixel_to_geo(x2, y1, img_w, img_h, bbox),
+            PoolDetector._pixel_to_geo(x2, y2, img_w, img_h, bbox),
+            PoolDetector._pixel_to_geo(x1, y2, img_w, img_h, bbox),
+            PoolDetector._pixel_to_geo(x1, y1, img_w, img_h, bbox),
         ]

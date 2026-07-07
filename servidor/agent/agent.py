@@ -1,11 +1,11 @@
 """
-Agent — The AI brain that orchestrates tools, skills, and RAG to respond to user messages.
+Agent — El cerebro de IA que orquesta herramientas, skills y RAG para responder mensajes del usuario.
 
-Concepts:
-- Agent: Orchestrates the conversation. Receives messages, decides actions, returns responses.
-- Tool: An atomic action the agent can invoke (executed on the frontend, not here).
-- Skill: A domain expertise that groups tools + specialized prompt context.
-- MCP: Tools from external MCP servers are executed server-side, not on the frontend.
+Conceptos:
+- Agent: Orquesta la conversación. Recibe mensajes, decide acciones, devuelve respuestas.
+- Tool: Acción atómica que el agente puede invocar (ejecutada en el frontend, no aquí).
+- Skill: Dominio de experiencia que agrupa herramientas + contexto especializado de prompt.
+- MCP: Herramientas de servidores MCP externos se ejecutan en el servidor, no en el frontend.
 """
 import json
 import logging
@@ -22,25 +22,46 @@ logger = logging.getLogger(__name__)
 
 
 class AgentResponse:
-    """Response from the agent — either text or a tool call request."""
+    """Respuesta del agente — lista de content blocks (formato Anthropic/MCP)."""
 
-    def __init__(self, content: str, response_type: str = "text",
-                 tool_calls: list = None, sources: list = None):
+    def __init__(self, content: list, sources: list = None):
         self.content = content
-        self.type = response_type  # "text" or "tool_call"
-        self.tool_calls = tool_calls or []
         self.sources = sources or []
+
+    @classmethod
+    def text(cls, text: str, sources: list = None) -> "AgentResponse":
+        return cls(content=[{"type": "text", "text": text}], sources=sources or [])
+
+    @classmethod
+    def tool_call(cls, text: str, tool_calls: list,
+                  sources: list = None) -> "AgentResponse":
+        blocks = [{"type": "text", "text": text}]
+        if tool_calls:
+            blocks.append({"type": "tool_call", "toolCalls": tool_calls})
+        return cls(content=blocks, sources=sources or [])
+
+    @property
+    def text_content(self) -> str:
+        texts = [b.get("text", "") for b in self.content if b.get("type") == "text"]
+        return "\n".join(texts)
+
+    @property
+    def tool_calls(self) -> list:
+        for b in self.content:
+            if b.get("type") == "tool_call":
+                return b.get("toolCalls", [])
+        return []
 
 
 class Agent:
     """
-    The AI agent that powers the API-IDEE assistant.
+    El agente de IA que impulsa el asistente API-IDEE.
 
-    Responsibilities:
-    - Build the system prompt from skills + RAG context + map state
-    - Call the LLM with available tools
-    - Execute MCP tools server-side in a loop
-    - Return either a text response or map tool call instructions
+    Responsabilidades:
+    - Construir el prompt del sistema a partir de skills + contexto RAG + estado del mapa
+    - Llamar al LLM con las herramientas disponibles
+    - Ejecutar herramientas MCP en el servidor en un bucle
+    - Devolver una respuesta de texto o instrucciones de tool call del mapa
     """
 
     def __init__(self, provider_name: Optional[str] = None,
@@ -71,10 +92,10 @@ class Agent:
     def run(self, user_message: str, history: list,
             map_state: Optional[dict] = None) -> AgentResponse:
         """
-        Process a user message and return a response.
+        Procesa un mensaje del usuario y devuelve una respuesta.
 
-        MCP tools are executed server-side in a loop; only map tools
-        are returned as tool_call for the frontend to execute.
+        Las herramientas MCP se ejecutan en el servidor en un bucle; solo las herramientas
+        del mapa se devuelven como tool_call para que el frontend las ejecute.
         """
         rag_results = retrieve_context(query=user_message)
         system_prompt = self._build_system_prompt(rag_results, map_state)
@@ -84,10 +105,10 @@ class Agent:
     def process_tool_result(self, tool_name: str, tool_result: dict,
                             success: bool, history: list) -> AgentResponse:
         """
-        Process a tool execution result and generate a follow-up response.
+        Procesa el resultado de una ejecución de herramienta y genera una respuesta de seguimiento.
 
-        Unlike run(), this does NOT include map state.
-        MCP tools are still handled inline if the LLM requests them.
+        A diferencia de run(), esto NO incluye el estado del mapa.
+        Las herramientas MCP aún se manejan en línea si el LLM las solicita.
         """
         last_user_content = ""
         for msg in reversed(history):
@@ -103,11 +124,11 @@ class Agent:
     def _run_llm_loop(self, llm_messages: list, rag_results: list,
                       max_iterations: int = 5) -> AgentResponse:
         """
-        Call the LLM in a loop, executing MCP tools inline.
+        Llama al LLM en un bucle, ejecutando herramientas MCP en línea.
 
-        - If the LLM returns only map tools → return them as tool_call.
-        - If the LLM returns MCP tools → execute them, feed results back, loop.
-        - If the LLM returns text → return as text.
+        - Si el LLM devuelve solo herramientas del mapa → devolverlas como tool_call.
+        - Si el LLM devuelve herramientas MCP → ejecutarlas, retroalimentar resultados, repetir.
+        - Si el LLM devuelve texto → devolver como texto.
         """
         tools = get_langchain_tools()
 
@@ -181,29 +202,26 @@ class Agent:
 
                 # If there are also map calls, return them so the frontend can execute them
                 if map_calls:
-                    return AgentResponse(
-                        content=response.content or "Ejecutando acción en el mapa...",
-                        response_type="tool_call",
-                        tool_calls=map_calls,
-                        sources=[chunk["metadata"] for chunk in rag_results] if rag_results else [],
-                    )
+                        return AgentResponse.tool_call(
+                            text=response.content or "Ejecutando acción en el mapa...",
+                            tool_calls=map_calls,
+                            sources=[chunk["metadata"] for chunk in rag_results] if rag_results else [],
+                        )
             else:
-                return AgentResponse(
-                    content=response.content or "Ejecutando acción en el mapa...",
-                    response_type="tool_call",
+                return AgentResponse.tool_call(
+                    text=response.content or "Ejecutando acción en el mapa...",
                     tool_calls=map_calls,
                     sources=[chunk["metadata"] for chunk in rag_results] if rag_results else [],
                 )
 
         logger.warning("MCP iteration limit (%d) reached", max_iterations)
-        return AgentResponse(
-            content="Se alcanzó el límite de iteraciones de herramientas MCP.",
-            response_type="text",
+        return AgentResponse.text(
+            "Se alcanzó el límite de iteraciones de herramientas MCP.",
         )
 
     @staticmethod
     def _format_mcp_result(result) -> str:
-        """Convert MCP result (content array) to a plain string for the LLM."""
+        """Convierte el resultado MCP (array de contenido) a una cadena simple para el LLM."""
         if isinstance(result, dict) and "content" in result:
             texts = []
             for item in result["content"]:
@@ -218,15 +236,14 @@ class Agent:
 
     def _build_response(self, response, rag_results):
         sources = [chunk["metadata"] for chunk in rag_results] if rag_results else []
-        return AgentResponse(
-            content=response.content,
-            response_type="text",
+        return AgentResponse.text(
+            response.content,
             sources=sources,
         )
 
     def _build_system_prompt(self, rag_results: list,
                              map_state: Optional[dict] = None) -> str:
-        """Assemble the full system prompt from RAG, skills, and map state."""
+        """Ensambla el prompt del sistema completo a partir de RAG, skills y estado del mapa."""
         context_text = self._format_rag_context(rag_results)
         skills_context = self.skill_registry.get_system_prompt()
 
