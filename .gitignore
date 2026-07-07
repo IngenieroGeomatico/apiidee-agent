@@ -1,3 +1,6 @@
+# OpenCode (internal sessions/plans)
+.omo/
+
 # Python
 __pycache__/
 *.py[cod]
