@@ -285,6 +285,65 @@ function chatagentEscapeHtml(unsafe) {
     .replace(/'/g, '&#039;');
 }
 
+/** Sanitiza HTML manteniendo solo tags y atributos seguros (allowlist).
+    Elimina scripts, event handlers (on*) e inyecciones de estilo peligrosas.
+    @param {string} html HTML sin sanitizar.
+    @returns {string} HTML seguro. */
+function chatagentSanitizeHtml(html) {
+  var ALLOWED_TAGS = [
+    'p', 'br', 'b', 'i', 'em', 'strong', 'a', 'ul', 'ol', 'li',
+    'code', 'pre', 'blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'span', 'div', 'table', 'thead', 'tbody', 'tr', 'td', 'th',
+    'details', 'summary', 'hr', 'sup', 'sub', 'mark',
+  ];
+  var ALLOWED_ATTRS = ['href', 'title', 'class', 'id', 'target', 'colspan', 'rowspan', 'onclick'];
+
+  var tmp = document.createElement('div');
+  tmp.innerHTML = html;
+
+  function walk(node) {
+    var children = Array.prototype.slice.call(node.childNodes);
+    for (var i = 0; i < children.length; i++) {
+      var child = children[i];
+      if (child.nodeType === 1) { // Element
+        var tag = child.tagName.toLowerCase();
+        if (ALLOWED_TAGS.indexOf(tag) === -1) {
+          // Reemplazar el elemento prohibido por su contenido de texto
+          while (child.firstChild) {
+            node.insertBefore(child.firstChild, child);
+          }
+          node.removeChild(child);
+          continue;
+        }
+        // Eliminar atributos no permitidos y event handlers
+        var attrs = Array.prototype.slice.call(child.attributes);
+        for (var j = 0; j < attrs.length; j++) {
+          var attrName = attrs[j].name.toLowerCase();
+          if (ALLOWED_ATTRS.indexOf(attrName) === -1) {
+            child.removeAttribute(attrs[j].name);
+          } else if (attrName === 'href') {
+            var val = (child.getAttribute('href') || '').trim().toLowerCase();
+            if (val.indexOf('javascript:') === 0 || val.indexOf('data:') === 0) {
+              child.removeAttribute('href');
+            }
+          } else if (attrName === 'onclick') {
+            // Solo permitir chatagentQuickReply en onclick
+            var onclickVal = child.getAttribute('onclick') || '';
+            if (onclickVal.indexOf('chatagentQuickReply') === -1) {
+              child.removeAttribute('onclick');
+            }
+          }
+        }
+        walk(child);
+      }
+      // Text nodes (nodeType 3) se mantienen tal cual
+    }
+  }
+
+  walk(tmp);
+  return tmp.innerHTML;
+}
+
 /* =========================================================================
    Plugin class
    ========================================================================= */
@@ -1112,6 +1171,8 @@ class ChatAgent {
      ------------------------------------------------------------------ */
 
   /** Aniade un mensaje al contenedor del chat y hace scroll automatico.
+    El contenido del assistant y system se sanitiza con una allowlist de
+    tags para prevenir XSS. Los mensajes del usuario ya llegan escapados.
     @param {string} role Rol del mensaje (user, assistant, system).
     @param {string} content Contenido HTML del mensaje.
     @param {Array} [sources] Fuentes citadas opcionales. */
@@ -1121,9 +1182,11 @@ class ChatAgent {
     var wrapper = document.createElement('div');
     wrapper.className = 'chatagent-message-wrapper ' + role;
 
+    var safeContent = (role === 'user') ? content : chatagentSanitizeHtml(content);
+
     var msgDiv = document.createElement('div');
     msgDiv.className = 'chatagent-message';
-    msgDiv.innerHTML = content;
+    msgDiv.innerHTML = safeContent;
 
     wrapper.appendChild(msgDiv);
     this.messagesContainer.appendChild(wrapper);
