@@ -56,7 +56,7 @@ class MessageModelTest(TestCase):
         msg = Message.objects.create(
             conversation=self.conversation,
             role=Message.Role.USER,
-            content="Hola, ¿qué tal?",
+            content=[{"type":"text","text":"Hola, ¿qué tal?"}],
         )
         self.assertEqual(msg.conversation, self.conversation)
         self.assertIsInstance(msg.id, uuid.UUID)

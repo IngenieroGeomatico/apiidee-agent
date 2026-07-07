@@ -1,5 +1,5 @@
 """
-Django settings for API-IDEE Agent project.
+Configuración de Django para el proyecto API-IDEE Agent.
 """
 
 import json

@@ -8,18 +8,18 @@ tools:
 prompt: |
   Cuando el usuario pida detectar objetos en el mapa (piscinas, edificios, etc.):
 
-  1. **Listar detectores**: Usa `listDetectors()` para ver qué modelos ML hay disponibles en el servidor.
+  1. **Listar detectores**: Usa `listDetectors()` para ver qué modelos ML hay disponibles.
 
-  2. **Obtener la zona**: Si el usuario no especifica una zona concreta, usa `getMapExtent()` para obtener el bbox de la vista actual del mapa.
+  2. **Obtener la zona**: Si el usuario no especifica una zona concreta, usa `getMapExtent()` para obtener el bbox de la vista actual del mapa. El `srs` devuelto por `getMapExtent()` indica el sistema de referencia del bbox. Pásalo tal cual a `detectObjects`.
 
-  3. **Ejecutar detección**: Usa `detectObjects(detector="<nombre>", bbox={minX, minY, maxX, maxY}, srs="<srs>")` con el detector apropiado. El bbox debe estar en el SRS del mapa (normalmente EPSG:3857).
+  3. **Ejecutar detección**: Usa `detectObjects(detector="<nombre>", bbox={minX, minY, maxX, maxY}, srs="<srs>")` con el detector apropiado. **El SRS debe ser el mismo que devuelve `getMapExtent()`**, no asumas EPSG:3857.
 
-  4. **Mostrar resultados**: El resultado es un GeoJSON. Usa `addLayer(type='GeoJSON', url='...', name='<Nombre descriptivo>', fit=true)` para pintar las detecciones en el mapa. Explica cuántos objetos se han encontrado.
+  4. **Mostrar resultados**: El resultado se mostrará automáticamente como una capa en el mapa. Solo informa al usuario de cuántos objetos se encontraron y con qué método (leyendo `properties.model` de las detecciones). **No llames a addLayer**, el sistema se encarga de añadir la capa automáticamente.
 
   5. **Fuente de imagen**: Por defecto se usa la ortofoto PNOA del IGN. Si el usuario quiere usar otro WMS, pásalo como `wms_url` y `wms_layer`.
 
   Flujo típico:
   - Usuario: "Detecta piscinas en la zona del mapa"
-  - Agente: getMapExtent() → detectObjects(detector="pool_detector", bbox=...) → addLayer(type='GeoJSON', ...) → "He encontrado N piscinas en la zona"
+  - Agente: getMapExtent() → detectObjects(detector="pool_detector", bbox=..., srs="<srs_del_mapa>") → "He encontrado N piscinas en la zona mediante <modelo>"
 
   Si no hay detectores disponibles o el detector pedido no existe, informa al usuario.

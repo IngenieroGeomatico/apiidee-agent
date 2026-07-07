@@ -1,12 +1,12 @@
 """
-Views — Thin HTTP wrappers that delegate to the Agent.
+Vistas — Envoltorios HTTP ligeros que delegan en el Agent.
 
-These views handle:
-- HTTP request/response (serialization, status codes)
-- Persistence (saving messages to DB)
-- Conversation management (create, list, delete)
+Estas vistas gestionan:
+- Petición/respuesta HTTP (serialización, códigos de estado)
+- Persistencia (guardar mensajes en la BD)
+- Gestión de conversaciones (crear, listar, eliminar)
 
-They do NOT contain agent logic (prompt building, LLM calls, RAG retrieval).
+NO contienen lógica del agente (construcción de prompts, llamadas al LLM, recuperación RAG).
 """
 import json
 import logging
@@ -26,13 +26,13 @@ logger = logging.getLogger(__name__)
 
 
 def providers_list(request):
-    """Return all configured providers and their available models (no API keys)."""
+    """Devuelve todos los proveedores configurados y sus modelos disponibles (sin API keys)."""
     return JsonResponse(get_configured_providers(), safe=False)
 
 
 @api_view(['POST'])
 def test_api_key(request):
-    """Test an API key against a specific provider by fetching its models."""
+    """Prueba una API key contra un proveedor específico obteniendo sus modelos."""
     provider_name = request.data.get('provider', '')
     api_key = request.data.get('api_key', '')
 
@@ -41,7 +41,7 @@ def test_api_key(request):
     if not provider_name:
         return Response({"valid": False, "error": "Nombre del proveedor es requerido"}, status=400)
 
-    # Find provider config
+    # Buscar configuración del proveedor
     provider_config = None
     for p in settings.LLM_PROVIDERS:
         if p["name"].lower() == provider_name.lower():
@@ -54,7 +54,7 @@ def test_api_key(request):
             "error": f"Proveedor '{provider_name}' no encontrado. Disponibles: {', '.join(p['name'] for p in settings.LLM_PROVIDERS)}"
         })
 
-    # Test the key by fetching models from the OpenAI-compatible endpoint
+    # Probar la key obteniendo modelos del endpoint compatible con OpenAI
     try:
         import requests
         base_url = provider_config["base_url"].rstrip("/")
@@ -113,14 +113,14 @@ class ConversationViewSet(
 
     @action(detail=True, methods=['get'], url_path='messages')
     def messages(self, request, pk=None):
-        """List all messages in a conversation."""
+        """Lista todos los mensajes de una conversación."""
         conversation = self.get_object()
         serializer = MessageSerializer(conversation.messages.all(), many=True)
         return Response(serializer.data)
 
     @action(detail=True, methods=['post'], url_path='chat')
     def chat(self, request, pk=None):
-        """Send a message and get an AI response."""
+        """Envía un mensaje y obtén una respuesta de la IA."""
         conversation = self.get_object()
 
         input_serializer = ChatInputSerializer(data=request.data)
@@ -131,17 +131,17 @@ class ConversationViewSet(
         model = input_serializer.validated_data.get('model')
         api_key = input_serializer.validated_data.get('api_key')
 
-        # Persist user message
+        # Persistir mensaje del usuario
         Message.objects.create(
             conversation=conversation,
             role=Message.Role.USER,
-            content=user_content,
+            content=[{"type": "text", "text": user_content}],
         )
         if not conversation.title:
             conversation.title = user_content[:100]
             conversation.save(update_fields=['title'])
 
-        # Delegate to Agent
+        # Delegar al Agent
         history = _build_history(conversation)
         agent = _make_agent(provider_name, model, api_key)
         result = agent.run(user_content, history, map_state=map_state)
@@ -153,7 +153,7 @@ class ConversationViewSet(
 
     @action(detail=True, methods=['post'], url_path='tool-result')
     def tool_result(self, request, pk=None):
-        """Receive tool execution results from the plugin."""
+        """Recibe resultados de ejecución de herramientas desde el plugin."""
         conversation = self.get_object()
 
         serializer = ToolResultSerializer(data=request.data)
@@ -166,15 +166,31 @@ class ConversationViewSet(
         model = serializer.validated_data.get('model')
         api_key = serializer.validated_data.get('api_key')
 
-        # Persist tool result
+        # Persistir resultado de la herramienta
         Message.objects.create(
             conversation=conversation,
             role=Message.Role.SYSTEM,
-            content=json.dumps({"tool": tool_name, "result": result_data, "success": success}),
+            content=[{"type": "tool_result", "tool_name": tool_name, "content": result_data, "success": success, "tool_call_id": tool_call_id}],
             metadata={"role": "tool", "tool_call_id": tool_call_id, "tool_name": tool_name},
         )
 
-        # Delegate to Agent
+        # Si la herramienta es geocodePlace y el resultado incluye una URL de GeoJSON, responder directamente
+        if tool_name == "geocodePlace" and isinstance(result_data, dict) and result_data.get("geojsonURL"):
+            assistant_msg = Message.objects.create(
+                conversation=conversation,
+                role=Message.Role.ASSISTANT,
+                content=[{"type": "layer", "layer": {"type": "geojson", "url": result_data["geojsonURL"], "name": result_data.get("name", "Capa")}}],
+            )
+            raw = MessageSerializer(assistant_msg).data
+            data = {
+                "id": raw["id"],
+                "role": raw["role"],
+                "created_at": raw["created_at"],
+                "content": raw["content"],
+            }
+            return Response(data, status=status.HTTP_201_CREATED)
+
+        # Delegar al Agent
         history = _build_history(conversation)
         agent = _make_agent(provider_name, model, api_key)
         result = agent.process_tool_result(tool_name, result_data, success, history)
@@ -197,30 +213,56 @@ def _build_history(conversation, max_messages: int = _MAX_HISTORY_MESSAGES) -> l
 
     messages = []
     for msg in qs:
-        m = {"role": msg.role, "content": msg.content}
+        # Extrae texto plano de los bloques de contenido
+        if isinstance(msg.content, list):
+            # Bloques tipo texto
+            texts = [b.get("text", "") for b in msg.content if b.get("type") == "text"]
+            plain = "\n".join(texts) if texts else ""
+        else:
+            plain = str(msg.content)
+        m = {"role": msg.role, "content": plain}
+        # Incluye tool_calls si están en metadata
         if msg.metadata.get("tool_calls"):
             m["tool_calls"] = msg.metadata["tool_calls"]
+        # Manejo especial para mensajes de herramienta (role="tool")
         if msg.metadata.get("role") == "tool":
+            # Busca el bloque tool_result para extraer su payload
+            tool_res = None
+            if isinstance(msg.content, list):
+                for b in msg.content:
+                    if b.get("type") == "tool_result":
+                        tool_res = b.get("content")
+                        break
             m["role"] = "tool"
             m["tool_call_id"] = msg.metadata.get("tool_call_id", "")
+            # El contenido del mensaje de herramienta será JSON string del resultado
+            if tool_res is not None:
+                m["content"] = json.dumps(tool_res, ensure_ascii=False)
         messages.append(m)
     return messages
 
-_agent_cache: dict = {}
+from collections import OrderedDict
+
+_agent_cache: OrderedDict = OrderedDict()
+_AGENT_CACHE_MAXSIZE = 128
 
 def _make_agent(provider_name, model, api_key):
     """Devuelve un Agent cacheado para esta combinación de proveedor/modelo/key.
 
     Los Agents no guardan estado entre peticiones, por lo que se pueden
-    reutilizar. El caché evita recrear los objetos del proveedor LLM
-    en cada petición HTTP.
+    reutilizar. El caché tiene un tamaño máximo LRU de {_AGENT_CACHE_MAXSIZE}
+    entradas para evitar fugas de memoria.
     """
     cache_key = (provider_name, model, api_key)
-    agent = _agent_cache.get(cache_key)
-    if agent is None:
+    try:
+        _agent_cache.move_to_end(cache_key)
+        return _agent_cache[cache_key]
+    except KeyError:
         agent = Agent(provider_name=provider_name, model=model, api_key=api_key)
         _agent_cache[cache_key] = agent
-    return agent
+        if len(_agent_cache) > _AGENT_CACHE_MAXSIZE:
+            _agent_cache.popitem(last=False)
+        return agent
 
 
 def _assistant_response(conversation, result, extra=None):
@@ -234,8 +276,31 @@ def _assistant_response(conversation, result, extra=None):
         content=result.content,
         metadata=metadata,
     )
-    data = MessageSerializer(msg).data
-    data["type"] = result.type
+    raw = MessageSerializer(msg).data
+    # `msg.content` is already a list of content blocks (text, tool_call, geojson)
+    content = raw["content"] if isinstance(raw["content"], list) else []
+
+    # Ensure text block is present (AgentResponse.text ensures this)
+    if not any(b.get("type") == "text" for b in content):
+        content.insert(0, {"type": "text", "text": ""})
+
     if extra and "tool_calls" in extra:
-        data["tool_calls"] = extra["tool_calls"]
+        content.append({"type": "tool_call", "toolCalls": extra["tool_calls"]})
+
+    from .tools.executors import pop_pending_detection_geojson
+    detection_geojson = pop_pending_detection_geojson()
+    if detection_geojson:
+        label = "Detecciones"
+        features = detection_geojson.get("features", [])
+        if features and features[0].get("properties", {}).get("label"):
+            label = features[0]["properties"]["label"] + " detectados"
+        content.append({"type": "layer", "layer": {"type": "geojson", "source": detection_geojson, "name": label}})
+
+    data = {
+        "id": raw["id"],
+        "role": raw["role"],
+        "created_at": raw["created_at"],
+        "content": content,
+    }
+
     return Response(data, status=status.HTTP_201_CREATED)

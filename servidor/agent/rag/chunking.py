@@ -1,10 +1,10 @@
-"""Code-aware chunking strategies for the RAG pipeline."""
+"""Estrategias de fragmentación conscientes del código para el pipeline RAG."""
 
 import os
 import re
 from typing import Dict, List
 
-# Extensions considered as code files
+# Extensiones consideradas como archivos de código
 _CODE_EXTENSIONS = {
     '.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.cs', '.go',
     '.rb', '.php', '.rs', '.c', '.cpp', '.h', '.hpp', '.swift',
@@ -16,8 +16,8 @@ _MARKDOWN_EXTENSIONS = {'.md', '.mdx', '.rst', '.wiki', '.txt'}
 def chunk_code_file(
     content: str, file_path: str, max_chunk_size: int = 1500
 ) -> List[Dict]:
-    """Split code by function/class boundaries using regex patterns."""
-    # Pattern matches common function/class/method definitions
+    """Divide el código por límites de función/clase usando patrones regex."""
+    # El patrón coincide con definiciones comunes de función/clase/método
     boundary_pattern = re.compile(
         r'^(?='
         r'(?:export\s+)?(?:async\s+)?(?:function|class|const|let|var)\s+'  # JS/TS
@@ -28,15 +28,15 @@ def chunk_code_file(
     )
 
     splits = boundary_pattern.split(content)
-    # Re-attach the boundary text that was consumed by lookahead
+    # Re-adjuntar el texto del límite que fue consumido por la búsqueda anticipada
     positions = [m.start() for m in boundary_pattern.finditer(content)]
 
     if not positions:
-        # No boundaries found — fall back to line-based splitting
+        # No se encontraron límites — usar división por líneas
         return _chunk_by_lines(content, file_path, max_chunk_size)
 
     chunks = []
-    # Text before first boundary
+    # Texto antes del primer límite
     if positions[0] > 0:
         preamble = content[: positions[0]].strip()
         if preamble:
@@ -48,7 +48,7 @@ def chunk_code_file(
         if segment:
             chunks.append(segment)
 
-    # Merge small chunks, split large ones
+    # Fusionar fragmentos pequeños, dividir los grandes
     ext = os.path.splitext(file_path)[1]
     language = ext.lstrip('.') if ext else 'text'
     return _finalize_chunks(chunks, file_path, language, max_chunk_size)
@@ -57,7 +57,7 @@ def chunk_code_file(
 def chunk_markdown_file(
     content: str, file_path: str, max_chunk_size: int = 1500
 ) -> List[Dict]:
-    """Split markdown by heading boundaries."""
+    """Divide markdown por límites de encabezados."""
     heading_pattern = re.compile(r'^(#{1,6}\s+.+)$', re.MULTILINE)
     positions = [m.start() for m in heading_pattern.finditer(content)]
 
@@ -80,7 +80,7 @@ def chunk_markdown_file(
 
 
 def chunk_file(content: str, file_path: str) -> List[Dict]:
-    """Dispatch to the appropriate chunking strategy based on file extension."""
+    """Selecciona la estrategia de fragmentación adecuada según la extensión del archivo."""
     ext = os.path.splitext(file_path)[1].lower()
 
     if ext in _MARKDOWN_EXTENSIONS:
@@ -88,7 +88,7 @@ def chunk_file(content: str, file_path: str) -> List[Dict]:
     if ext in _CODE_EXTENSIONS:
         return chunk_code_file(content, file_path)
 
-    # Default: treat as plain text, chunk by lines
+    # Por defecto: tratar como texto plano, fragmentar por líneas
     return _chunk_by_lines(content, file_path, max_chunk_size=1500)
 
 
@@ -99,7 +99,7 @@ def chunk_file(content: str, file_path: str) -> List[Dict]:
 def _chunk_by_lines(
     content: str, file_path: str, max_chunk_size: int
 ) -> List[Dict]:
-    """Simple line-based chunking for files without clear boundaries."""
+    """Fragmentación simple por líneas para archivos sin límites claros."""
     lines = content.split('\n')
     chunks: List[str] = []
     current: List[str] = []
@@ -139,7 +139,7 @@ def _finalize_chunks(
     language: str,
     max_chunk_size: int,
 ) -> List[Dict]:
-    """Merge small chunks, split oversized ones, and add metadata."""
+    """Fusiona fragmentos pequeños, divide los demasiado grandes y añade metadatos."""
     merged: List[str] = []
     buffer = ""
 
@@ -149,7 +149,7 @@ def _finalize_chunks(
         else:
             if buffer:
                 merged.append(buffer)
-            # If this single chunk is too large, split it by lines
+            # Si este fragmento individual es demasiado grande, dividirlo por líneas
             if len(chunk) > max_chunk_size:
                 lines = chunk.split('\n')
                 sub_buf = ""

@@ -1,4 +1,4 @@
-"""FAISS vector store wrapper utilities."""
+"""Utilidades envolventes para el almacén vectorial FAISS."""
 
 import logging
 from pathlib import Path
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_vectorstore(repo_name: str):
-    """Load and return a FAISS vector store for the given repo, or None."""
+    """Carga y devuelve un almacén vectorial FAISS para el repositorio dado, o None."""
     store_path = Path(settings.VECTORSTORE_DIR) / repo_name
     index_path = store_path / "index.faiss"
 
@@ -33,7 +33,7 @@ def get_vectorstore(repo_name: str):
 
 
 def list_available_stores() -> List[str]:
-    """Return names of all indexed repositories with a valid FAISS index."""
+    """Devuelve los nombres de todos los repositorios indexados con un índice FAISS válido."""
     vectorstore_dir = Path(settings.VECTORSTORE_DIR)
     if not vectorstore_dir.exists():
         return []

@@ -1,23 +1,24 @@
 """
-Indexer — Modular system for indexing knowledge sources into FAISS.
+Indexador — Sistema modular para indexar fuentes de conocimiento en FAISS.
 
-Supports multiple source types via BaseIndexer subclasses:
-- GitRepoIndexer: clones a git repo and indexes its files
-- WebIndexer: crawls a web page and indexes its content
+Soporta múltiples tipos de fuente mediante subclases de BaseIndexer:
+- GitRepoIndexer: clona un repositorio git e indexa sus archivos
+- WebIndexer: rastrea una página web e indexa su contenido
 
-To add a new source type: create a new class extending BaseIndexer.
+Para añadir un nuevo tipo de fuente: crea una nueva clase que extienda BaseIndexer.
 """
+from __future__ import annotations
+
 import logging
 import os
 import shutil
 import tempfile
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Dict, List
 
 from django.conf import settings
 
-from html.parser import HTMLParser
+from agent.utils.html_parser import TextExtractor
 
 from .chunking import chunk_file
 
@@ -29,39 +30,39 @@ logger = logging.getLogger(__name__)
 # =========================================================================
 
 class BaseIndexer(ABC):
-    """Base class for all knowledge source indexers."""
+    """Clase base para todos los indexadores de fuentes de conocimiento."""
 
     @property
     @abstractmethod
     def source_type(self) -> str:
-        """Identifier for this indexer type (must match KnowledgeSource.SourceType)."""
+        """Identificador para este tipo de indexador (debe coincidir con KnowledgeSource.SourceType)."""
         pass
 
     @abstractmethod
-    def collect_chunks(self, url: str) -> List[Dict]:
+    def collect_chunks(self, url: str) -> list[dict]:
         """
-        Fetch content from the source and return a list of chunks.
+        Obtiene contenido de la fuente y devuelve una lista de fragmentos.
 
-        Each chunk is a dict with:
-          - "content": str — the text content
-          - "metadata": dict — at minimum {"source": str, "chunk_index": int}
+        Cada fragmento es un dict con:
+          - "content": str — el contenido de texto
+          - "metadata": dict — como mínimo {"source": str, "chunk_index": int}
 
         Returns:
-            List of chunk dicts.
+            Lista de dicts de fragmentos.
         """
         pass
 
     def index(self, url: str, name: str, batch_size: int = 100) -> int:
         """
-        Full indexing pipeline: collect chunks, embed, store in FAISS.
+        Pipeline completo de indexación: recolecta fragmentos, embedding y almacena en FAISS.
 
         Args:
-            url: URL of the knowledge source.
-            name: Name used for the FAISS store directory.
-            batch_size: Number of chunks to embed per batch (lower = less memory).
+            url: URL de la fuente de conocimiento.
+            name: Nombre del directorio del almacén FAISS.
+            batch_size: Número de fragmentos a embedding por lote (menor = menos memoria).
 
         Returns:
-            Number of chunks created.
+            Número de fragmentos creados.
         """
         from langchain_community.vectorstores import FAISS
         from .embeddings import get_embeddings
@@ -130,13 +131,13 @@ _MAX_FILE_SIZE = 500 * 1024  # 500 KB
 
 
 class GitRepoIndexer(BaseIndexer):
-    """Indexes a git repository by cloning it and chunking its files."""
+    """Indexa un repositorio git clonándolo y dividiendo sus archivos en fragmentos."""
 
     @property
     def source_type(self):
         return "git"
 
-    def collect_chunks(self, url: str) -> List[Dict]:
+    def collect_chunks(self, url: str) -> list[dict]:
         import git
 
         tmp_dir = tempfile.mkdtemp(prefix="indexer_git_")
@@ -183,50 +184,14 @@ class GitRepoIndexer(BaseIndexer):
 # Web page indexer
 # =========================================================================
 
-class _TextExtractor(HTMLParser):
-    """Extrae texto plano y enlaces de HTML, ignorando script/style/nav/footer/header.
-
-    Usa un contador de profundidad en vez de un booleano para que los tags
-    anidados (p.ej. <nav><footer>...</footer></nav>) se manejen correctamente.
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.text_parts = []
-        self.links = []
-        self._skip_depth = 0
-        self._skip_tags = {'script', 'style', 'nav', 'footer', 'header'}
-
-    def handle_starttag(self, tag, attrs):
-        if tag in self._skip_tags:
-            self._skip_depth += 1
-        if tag == 'a':
-            for attr_name, attr_val in attrs:
-                if attr_name == 'href' and attr_val:
-                    self.links.append(attr_val)
-        if tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
-            level = int(tag[1])
-            self.text_parts.append('\n' + '#' * level + ' ')
-        if tag in ('p', 'div', 'li', 'br', 'tr'):
-            self.text_parts.append('\n')
-
-    def handle_endtag(self, tag):
-        if tag in self._skip_tags and self._skip_depth > 0:
-            self._skip_depth -= 1
-
-    def handle_data(self, data):
-        if self._skip_depth == 0:
-            self.text_parts.append(data)
-
-
 class WebIndexer(BaseIndexer):
-    """Indexes a web page by fetching its HTML and extracting text content."""
+    """Indexa una página web obteniendo su HTML y extrayendo el contenido de texto."""
 
     @property
     def source_type(self):
         return "web"
 
-    def collect_chunks(self, url: str) -> List[Dict]:
+    def collect_chunks(self, url: str) -> list[dict]:
         import re
         from urllib.request import urlopen, Request
         from urllib.parse import urljoin, urlparse
@@ -255,15 +220,13 @@ class WebIndexer(BaseIndexer):
                 logger.warning("Failed to fetch %s: %s", current_url, exc)
                 continue
 
-            # Extract text and links
-            text, links = _parse_html(html)
+            text, links = _extract_html(html)
 
             if text.strip():
                 from .chunking import chunk_markdown_file
                 page_chunks = chunk_markdown_file(text, current_url)
                 all_chunks.extend(page_chunks)
 
-            # Follow same-domain links
             for link in links:
                 abs_link = urljoin(current_url, link)
                 parsed = urlparse(abs_link)
@@ -274,9 +237,9 @@ class WebIndexer(BaseIndexer):
         return all_chunks
 
 
-def _parse_html(html: str):
-    """Extract text content and links from HTML."""
-    parser = _TextExtractor()
+def _extract_html(html: str):
+    """Extrae texto y enlaces de un HTML."""
+    parser = TextExtractor()
     parser.feed(html)
     return ''.join(parser.text_parts), parser.links
 
@@ -292,7 +255,7 @@ _INDEXER_REGISTRY = {
 
 
 def get_indexer(source_type: str) -> BaseIndexer:
-    """Get an indexer instance for the given source type."""
+    """Obtiene una instancia del indexador para el tipo de fuente indicado."""
     cls = _INDEXER_REGISTRY.get(source_type)
     if cls is None:
         raise ValueError(
@@ -304,18 +267,18 @@ def get_indexer(source_type: str) -> BaseIndexer:
 
 def index_source(url: str, name: str, source_type: str = "git", batch_size: int = 100) -> int:
     """
-    Index a knowledge source.
+    Indexa una fuente de conocimiento.
 
-    This is the main entry point — replaces the old index_repository().
+    Este es el punto de entrada principal — reemplaza el antiguo index_repository().
 
     Args:
-        url: URL of the source (git repo URL or web page URL).
-        name: Name for the FAISS store directory.
-        source_type: "git" or "web".
-        batch_size: Number of chunks to embed per batch (lower = less memory).
+        url: URL de la fuente (URL de repositorio git o página web).
+        name: Nombre del directorio del almacén FAISS.
+        source_type: "git" o "web".
+        batch_size: Número de fragmentos a embedding por lote (menor = menos memoria).
 
     Returns:
-        Number of chunks created.
+        Número de fragmentos creados.
     """
     indexer = get_indexer(source_type)
     return indexer.index(url, name, batch_size=batch_size)
@@ -323,5 +286,5 @@ def index_source(url: str, name: str, source_type: str = "git", batch_size: int 
 
 # Backward compatibility
 def index_repository(repo_url: str, repo_name: str, batch_size: int = 100) -> int:
-    """Legacy wrapper — calls index_source with source_type='git'."""
+    """Wrapper legacy — llama a index_source con source_type='git'."""
     return index_source(repo_url, repo_name, source_type="git", batch_size=batch_size)

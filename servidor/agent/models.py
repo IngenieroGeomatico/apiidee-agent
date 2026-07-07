@@ -32,7 +32,7 @@ class Message(models.Model):
         Conversation, on_delete=models.CASCADE, related_name="messages"
     )
     role = models.CharField(max_length=10, choices=Role.choices)
-    content = models.TextField()
+    content = models.JSONField(default=list)
     created_at = models.DateTimeField(auto_now_add=True)
     metadata = models.JSONField(default=dict, blank=True)
 
@@ -41,4 +41,12 @@ class Message(models.Model):
 
     def __str__(self):
         """Devuelve una representación corta del mensaje con rol y comienzo del contenido."""
-        return f"{self.role}: {self.content[:50]}"
+        first = self._text_content()[:50]
+        return f"{self.role}: {first}"
+
+    def _text_content(self) -> str:
+        """Extrae el texto de los content blocks (compatible con strings legacy)."""
+        if isinstance(self.content, str):
+            return self.content
+        texts = [b.get("text", "") for b in self.content if b.get("type") == "text"]
+        return "\n".join(texts)

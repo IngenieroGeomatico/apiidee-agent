@@ -1,21 +1,22 @@
 """Tests unitarios para el módulo de indexación (indexer.py).
 
-Cubre el parser HTML (_TextExtractor), la función _parse_html y
+Cubre el parser HTML (TextExtractor), la función _extract_html y
 el registro de indexers (get_indexer).
 """
 from django.test import TestCase
 
-from agent.rag.indexer import _TextExtractor, _parse_html, get_indexer
+from agent.utils.html_parser import TextExtractor
+from agent.rag.indexer import _extract_html, get_indexer
 from agent.rag.indexer import GitRepoIndexer, WebIndexer
 
 
 class TextExtractorSimpleTagsTest(TestCase):
-    """Verifica que _TextExtractor extrae texto de tags simples (p, div, h1-h6)."""
+    """Verifica que TextExtractor extrae texto de tags simples (p, div, h1-h6)."""
 
     def test_extrae_texto_de_p_div_y_headings(self):
         """Párrafos, divs y headings deben producir texto con saltos de línea."""
         html = "<p>Hola</p><div>Mundo</div><h1>Título</h1><h3>Subtítulo</h3>"
-        extractor = _TextExtractor()
+        extractor = TextExtractor()
         extractor.feed(html)
         text = "".join(extractor.text_parts)
 
@@ -38,7 +39,7 @@ class TextExtractorSkipTagsTest(TestCase):
             "<header>cabecera</header>"
             "<p>visible</p>"
         )
-        extractor = _TextExtractor()
+        extractor = TextExtractor()
         extractor.feed(html)
         text = "".join(extractor.text_parts)
 
@@ -56,7 +57,7 @@ class TextExtractorSkipDepthTest(TestCase):
     def test_skip_depth_tags_anidados(self):
         """Tags skip anidados deben ocultarse; el texto fuera debe ser visible."""
         html = "<nav><footer>hidden</footer></nav>visible"
-        extractor = _TextExtractor()
+        extractor = TextExtractor()
         extractor.feed(html)
         text = "".join(extractor.text_parts)
 
@@ -66,7 +67,7 @@ class TextExtractorSkipDepthTest(TestCase):
     def test_skip_depth_doble_apertura(self):
         """Doble apertura de skip tags incrementa profundidad correctamente."""
         html = "<nav><nav>oculto</nav>aún oculto</nav>fuera"
-        extractor = _TextExtractor()
+        extractor = TextExtractor()
         extractor.feed(html)
         text = "".join(extractor.text_parts)
 
@@ -76,12 +77,12 @@ class TextExtractorSkipDepthTest(TestCase):
 
 
 class TextExtractorLinksTest(TestCase):
-    """Verifica que _TextExtractor extrae enlaces de tags <a href>."""
+    """Verifica que TextExtractor extrae enlaces de tags <a href>."""
 
     def test_extrae_links(self):
         """Los href de tags <a> deben registrarse en la lista de links."""
         html = '<a href="https://example.com">Enlace</a><a href="/ruta">Otro</a>'
-        extractor = _TextExtractor()
+        extractor = TextExtractor()
         extractor.feed(html)
 
         self.assertEqual(len(extractor.links), 2)
@@ -90,12 +91,12 @@ class TextExtractorLinksTest(TestCase):
 
 
 class ParseHtmlTest(TestCase):
-    """Verifica que _parse_html devuelve una tupla (texto, links)."""
+    """Verifica que _extract_html devuelve una tupla (texto, links)."""
 
     def test_devuelve_tupla_texto_y_links(self):
-        """_parse_html debe devolver (str, list) con el texto y los enlaces."""
+        """_extract_html debe devolver (str, list) con el texto y los enlaces."""
         html = '<p>Texto</p><a href="http://x.com">link</a>'
-        text, links = _parse_html(html)
+        text, links = _extract_html(html)
 
         self.assertIsInstance(text, str)
         self.assertIsInstance(links, list)

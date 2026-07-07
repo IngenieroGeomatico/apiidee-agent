@@ -169,7 +169,7 @@ class MessageSerializerTest(TestCase):
         self.message = Message.objects.create(
             conversation=self.conversation,
             role=Message.Role.USER,
-            content="Contenido de prueba",
+            content=[{"type": "text", "text": "Contenido de prueba"}],
             metadata={"key": "value"},
         )
 
@@ -188,6 +188,6 @@ class MessageSerializerTest(TestCase):
     def test_contenido_serializado(self):
         """Verifica que el contenido se serializa correctamente."""
         serializer = MessageSerializer(self.message)
-        self.assertEqual(serializer.data["content"], "Contenido de prueba")
+        self.assertEqual(serializer.data["content"], [{"type": "text", "text": "Contenido de prueba"}])
         self.assertEqual(serializer.data["role"], "user")
         self.assertEqual(serializer.data["metadata"], {"key": "value"})

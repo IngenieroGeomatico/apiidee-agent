@@ -1,10 +1,12 @@
-from typing import Dict, List, Optional
+from __future__ import annotations
+
+from typing import Optional
 
 from django.conf import settings
 
 
 class ChatResponse:
-    """Represents either a text response or a tool call."""
+    """Respuesta del LLM que puede contener texto y/o llamadas a herramientas."""
 
     def __init__(self, content: str = "", tool_calls: Optional[list] = None):
         """Inicializa una respuesta con contenido textual y/o llamadas a herramientas."""
@@ -27,7 +29,7 @@ class BaseLLMProvider:
 
     llm = None  # Las subclases lo inicializan en __init__
 
-    def chat(self, messages: List[Dict], tools: Optional[List] = None) -> ChatResponse:
+    def chat(self, messages: list[dict], tools: Optional[list] = None) -> ChatResponse:
         """Envía mensajes al LLM y devuelve una ChatResponse con texto y/o tool calls."""
         lc_messages = [self._convert_message(m) for m in messages]
 

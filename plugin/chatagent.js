@@ -9,7 +9,7 @@
  */
 
 /* =========================================================================
-   Tool executor — maps tool names to IDEE.Map calls
+   Ejecutor de herramientas — asocia nombres de herramientas a llamadas de IDEE.Map
    ========================================================================= */
 
 var CHATAGENT_TOOL_MAP = {
@@ -96,11 +96,23 @@ var CHATAGENT_TOOL_MAP = {
         break;
 
       case 'GEOJSON':
-        addedLayer = new IDEE.layer.GeoJSON({
-          url: args.url,
-          name: legend,
-          legend: legend,
-        });
+        var geojsonOpts = { name: legend, legend: legend };
+        if (args.url) {
+          geojsonOpts.url = args.url;
+        } else if (args.data) {
+          if (typeof args.data === 'object' && args.data !== null) {
+            geojsonOpts.source = args.data;
+          } else {
+            try {
+              geojsonOpts.source = JSON.parse(args.data);
+            } catch (e) {
+              return { success: false, error: 'GeoJSON data no válido: ' + e.message };
+            }
+          }
+        } else {
+          return { success: false, error: 'Se requiere url o data para GeoJSON' };
+        }
+        addedLayer = new IDEE.layer.GeoJSON(geojsonOpts);
         break;
 
       case 'KML':
@@ -150,12 +162,25 @@ var CHATAGENT_TOOL_MAP = {
           if (typeof addedLayer.getMaxExtent === 'function') {
             var extent = addedLayer.getMaxExtent();
             if (extent && Array.isArray(extent) && extent.length === 4) {
-              try { map.setBbox({ x: { min: extent[0], max: extent[2] }, y: { min: extent[1], max: extent[3] } }); } catch (e) { console.error('setBbox error:', e); }
+              var minX = extent[0], minY = extent[1], maxX = extent[2], maxY = extent[3];
+              if (type === 'GEOJSON' && args.data) {
+                var p4 = window.proj4 || (IDEE && IDEE.proj4);
+                if (p4) {
+                  try {
+                    var sw = p4('EPSG:4326', 'EPSG:3857', [minX, minY]);
+                    var ne = p4('EPSG:4326', 'EPSG:3857', [maxX, maxY]);
+                    minX = sw[0]; minY = sw[1]; maxX = ne[0]; maxY = ne[1];
+                  } catch(e) {
+                    console.warn('proj4 falló:', e);
+                  }
+                }
+              }
+              try { map.setBbox({ x: { min: minX, max: maxX }, y: { min: minY, max: maxY } }); } catch (e) { console.error('setBbox error:', e); }
             }
           }
         };
         addedLayer.on(IDEE.evt.LOAD, fitHandler);
-        // Fallback: if LOAD already fired before handler registered, try fit
+        // Fallback: si LOAD ya se disparó antes de registrar el manejador, intentar fit
         setTimeout(fitHandler, 3000);
       }
     }
@@ -305,7 +330,7 @@ function chatagentSanitizeHtml(html) {
     var children = Array.prototype.slice.call(node.childNodes);
     for (var i = 0; i < children.length; i++) {
       var child = children[i];
-      if (child.nodeType === 1) { // Element
+      if (child.nodeType === 1) { // Elemento
         var tag = child.tagName.toLowerCase();
         if (ALLOWED_TAGS.indexOf(tag) === -1) {
           // Reemplazar el elemento prohibido por su contenido de texto
@@ -345,7 +370,7 @@ function chatagentSanitizeHtml(html) {
 }
 
 /* =========================================================================
-   Plugin class
+   Clase del plugin
    ========================================================================= */
 
 var CHATAGENT_STORAGE_KEY = 'chatagent_user_keys';
@@ -364,14 +389,14 @@ class ChatAgent {
     this.options.placeholder = this.options.placeholder || 'Pregunta sobre API-IDEE...';
     this.options.welcomeMessage = this.options.welcomeMessage || null;
 
-    // State
+    // Estado
     this.map_ = null;
     this.panel_ = null;
     this.control_ = null;
     this.conversationId = null;
     this.providers = [];
 
-    // DOM refs (cached in _onActivate)
+    // Referencias al DOM (cacheadas en _onActivate)
     this.messagesContainer = null;
     this.inputElement = null;
     this.loadingEl = null;
@@ -389,11 +414,11 @@ class ChatAgent {
     this.testResult = null;
     this.storedKeys = null;
 
-    // Selected provider/model from the bar
+    // Proveedor/modelo seleccionado de la barra
     this.selectedProvider = null;
     this.selectedModel = null;
 
-    // User-saved entries: [{ id, name, provider, apiKey }]
+    // Entradas guardadas por el usuario: [{ id, name, provider, apiKey }]
     this.userEntries = [];
     this._loadUserEntries();
   }
@@ -412,7 +437,7 @@ class ChatAgent {
   }
 
   /* ------------------------------------------------------------------
-     User entries persistence (localStorage)
+     Persistencia de entradas de usuario (localStorage)
      ------------------------------------------------------------------ */
 
   /** Carga las entradas de usuario (claves guardadas) desde localStorage. */
@@ -447,7 +472,7 @@ class ChatAgent {
   }
 
   /* ------------------------------------------------------------------
-     Plugin lifecycle
+     Ciclo de vida del plugin
      ------------------------------------------------------------------ */
 
   /** Aniade el plugin al mapa. Crea el panel, el control y monta el HTML del chat.
@@ -472,7 +497,7 @@ class ChatAgent {
       tooltip: this.options.tooltip,
     });
 
-    // 2. HTML for the chat panel
+    // HTML para el panel del chat
     var htmlPanel = ''
       + '<div aria-label="asistente IA" role="menuitem" id="div-contenedor-chatagent" class="m-control m-container m-chatagent-container">'
       +   '<header role="heading" tabindex="0" id="m-chatagent-title" class="m-chatagent-header">'
@@ -549,7 +574,7 @@ class ChatAgent {
   }
 
   /* ------------------------------------------------------------------
-     Lifecycle
+     Ciclo de vida
      ------------------------------------------------------------------ */
 
   /** Configura las referencias DOM y los eventos al activarse el control del chat. */
@@ -596,7 +621,7 @@ class ChatAgent {
     this.inputElement.addEventListener('keydown', this._onInputKeydown);
     this.inputElement.addEventListener('input', this._onInputChange);
 
-    // Provider select in bar
+    // Selector de proveedor en la barra
     if (this.providerSelect) {
       this.providerSelect.addEventListener('change', function() {
         self._onProviderChange(self.providerSelect.value);
@@ -608,28 +633,28 @@ class ChatAgent {
       });
     }
 
-    // Settings toggle
+    // Alternar panel de ajustes
     if (this.settingsToggle) {
       this.settingsToggle.addEventListener('click', function() {
         self._toggleSettings();
       });
     }
 
-    // Test connection
+    // Probar conexión
     if (this.connTest) {
       this.connTest.addEventListener('click', function() {
         self._testKey();
       });
     }
 
-    // Save key
+    // Guardar clave
     if (this.settingsSave) {
       this.settingsSave.addEventListener('click', function() {
         self._saveKey();
       });
     }
 
-    // API key visibility toggle
+    // Alternar visibilidad de API key
     if (this.apiKeyToggle) {
       this.apiKeyToggle.addEventListener('click', function() {
         if (self.apiKeyInput) {
@@ -638,7 +663,7 @@ class ChatAgent {
       });
     }
 
-    // Fetch providers and populate selectors
+    // Obtener proveedores y poblar selectores
     this._fetchProviders().then(function() {
       self.sendBtn.disabled = false;
       self.inputElement.disabled = false;
@@ -681,32 +706,32 @@ class ChatAgent {
   }
 
   /* ------------------------------------------------------------------
-     Provider selection
+     Selección de proveedor
      ------------------------------------------------------------------ */
 
   /** Maneja el cambio de proveedor seleccionado en la barra superior.
     @param {string} value Identificador del proveedor (o prefijo __entry__ para claves guardadas). */
   _onProviderChange(value) {
     if (value && value.indexOf('__entry__') === 0) {
-      // User entry selected
+      // Entrada de usuario seleccionada
       var entryId = value.replace('__entry__', '');
       var entry = this._findEntryById(entryId);
       if (entry) {
         this._activeEntryId = entryId;
         this.selectedProvider = entry.provider;
         this._updateModelSelect(entry.provider);
-        // Trigger settings sync
+        // Disparar sincronización de ajustes
         return;
       }
     }
-    // Server provider selected
+    // Proveedor de servidor seleccionado
     this._activeEntryId = null;
     this.selectedProvider = value;
     this._updateModelSelect(value);
   }
 
   /* ------------------------------------------------------------------
-     Provider / Model fetching
+     Obtención de proveedor / modelo
      ------------------------------------------------------------------ */
 
   /** Obtiene la lista de proveedores disponibles desde el backend. */
@@ -729,7 +754,7 @@ class ChatAgent {
     this.providerSelect.innerHTML = '';
     if (this.settingsProv) this.settingsProv.innerHTML = '';
 
-    // Server providers
+    // Proveedores del servidor
     this.providers.forEach(function(p) {
       var opt = document.createElement('option');
       opt.value = p.name;
@@ -743,7 +768,7 @@ class ChatAgent {
       }
     });
 
-    // User entries
+    // Entradas de usuario
     if (this.userEntries.length > 0) {
       var sep = document.createElement('option');
       sep.disabled = true;
@@ -758,7 +783,7 @@ class ChatAgent {
       });
     }
 
-    // Restore selection
+    // Restaurar selección
     if (this._activeEntryId) {
       this.providerSelect.value = '__entry__' + this._activeEntryId;
     } else if (this.selectedProvider) {
@@ -803,7 +828,7 @@ class ChatAgent {
     this.providerSelect.innerHTML = '';
     if (this.settingsProv) this.settingsProv.innerHTML = '';
 
-    // Server providers
+    // Proveedores del servidor
     this.providers.forEach(function(p) {
       var opt = document.createElement('option');
       opt.value = p.name;
@@ -817,7 +842,7 @@ class ChatAgent {
       }
     });
 
-    // User entries
+    // Entradas de usuario
     if (this.userEntries.length > 0) {
       var sep = document.createElement('option');
       sep.disabled = true;
@@ -832,7 +857,7 @@ class ChatAgent {
       });
     }
 
-    // Restore selection
+    // Restaurar selección
     if (this._activeEntryId) {
       this.providerSelect.value = '__entry__' + this._activeEntryId;
     } else if (this.selectedProvider) {
@@ -845,7 +870,7 @@ class ChatAgent {
   }
 
   /* ------------------------------------------------------------------
-     Settings panel
+     Panel de ajustes
      ------------------------------------------------------------------ */
 
   /** Abre o cierra el panel de configuracion de claves. */
@@ -974,14 +999,14 @@ class ChatAgent {
     this.userEntries.push(newEntry);
     this._saveUserEntries();
 
-    // Select the new entry
+    // Seleccionar la nueva entrada
     this._activeEntryId = newEntry.id;
     this.selectedProvider = provider;
     this._refreshProviderBar();
     this._updateModelSelect(provider);
     this._renderStoredKeys();
 
-    // Clear form
+    // Limpiar formulario
     if (nameInput) nameInput.value = '';
     if (apiKeyInput) apiKeyInput.value = '';
     this._clearTestResult();
@@ -1000,7 +1025,7 @@ class ChatAgent {
 
     if (this._activeEntryId === id) {
       this._activeEntryId = null;
-      // Fall back to first server provider
+      // Usar primer proveedor del servidor como fallback
       if (this.providers.length > 0) {
         this.selectedProvider = this.providers[0].name;
       }
@@ -1012,7 +1037,7 @@ class ChatAgent {
   }
 
   /* ------------------------------------------------------------------
-     Chat logic
+     Lógica del chat
      ------------------------------------------------------------------ */
 
   /** Devuelve la API key activa (de una entrada guardada) o null si no hay.
@@ -1106,13 +1131,30 @@ class ChatAgent {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
 
-      if (data.type === 'tool_call' && data.tool_calls && data.tool_calls.length > 0) {
-        if (data.content) {
-          this._appendMessage('assistant', data.content);
+      var handledToolCall = false;
+      if (data.content) {
+        for (var r = 0; r < data.content.length; r++) {
+          var item = data.content[r];
+            if (item.type === 'layer') {
+              var layerInfo = item.layer;
+              var layerType = layerInfo.type;
+              if (layerType === 'geojson') {
+                var gLayer = new IDEE.layer.GeoJSON({
+                  name: layerInfo.name || 'Capa',
+                  source: layerInfo.source,
+                  url: layerInfo.url,
+                });
+                this.map_.addLayers([gLayer]);
+              }
+            } else if (item.type === 'tool_call' && item.toolCalls) {
+            if (!handledToolCall) {
+              await this._handleToolCalls(item.toolCalls);
+              handledToolCall = true;
+            }
+          } else if (item.type === 'text') {
+            this._appendMessage('assistant', item.text, data.metadata ? data.metadata.sources : null);
+          }
         }
-        await this._handleToolCalls(data.tool_calls);
-      } else {
-        this._appendMessage('assistant', data.content, data.metadata ? data.metadata.sources : null);
       }
     } catch (error) {
       console.error('Error sending message:', error);
@@ -1151,13 +1193,25 @@ class ChatAgent {
         if (!res.ok) throw new Error('HTTP ' + res.status);
         var data = await res.json();
 
-        if (data.type === 'tool_call' && data.tool_calls && data.tool_calls.length > 0) {
-          if (data.content) {
-            this._appendMessage('assistant', data.content);
+        var handledToolCall = false;
+        if (data.content) {
+          for (var rx = 0; rx < data.content.length; rx++) {
+            var it = data.content[rx];
+            if (it.type === 'text') {
+              this._appendMessage('assistant', it.text, data.metadata ? data.metadata.sources : null);
+            } else if (it.type === 'tool_call' && it.toolCalls) {
+              if (!handledToolCall) {
+                await this._handleToolCalls(it.toolCalls);
+                handledToolCall = true;
+              }
+            } else if (it.type === 'geojson') {
+              var gLayer = new IDEE.layer.GeoJSON({
+                name: it.name || 'Detecciones',
+                source: it.geojson,
+              });
+              this.map_.addLayers([gLayer]);
+            }
           }
-          await this._handleToolCalls(data.tool_calls);
-        } else {
-          this._appendMessage('assistant', data.content, data.metadata ? data.metadata.sources : null);
         }
       } catch (error) {
         console.error('Error sending tool result:', error);
@@ -1167,9 +1221,15 @@ class ChatAgent {
   }
 
   /* ------------------------------------------------------------------
-     UI helpers
+     Ayudantes de UI
      ------------------------------------------------------------------ */
 
+  /** Aniade un mensaje al contenedor del chat y hace scroll automatico.
+    El contenido del assistant y system se sanitiza con una allowlist de
+    tags para prevenir XSS. Los mensajes del usuario ya llegan escapados.
+    @param {string} role Rol del mensaje (user, assistant, system).
+    @param {string} content Contenido HTML del mensaje.
+    @param {Array} [sources] Fuentes citadas opcionales. */
   _appendMessage(role, content, sources) {
     if (!this.messagesContainer) return;
 
@@ -1218,7 +1278,7 @@ class ChatAgent {
 }
 
 /* =========================================================================
-   Register plugin
+   Registrar plugin
    ========================================================================= */
 
 if (typeof window !== 'undefined') {
