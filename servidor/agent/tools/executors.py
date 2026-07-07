@@ -36,26 +36,32 @@ def has_executor(name: str) -> bool:
 
 
 class _TextExtractor(HTMLParser):
+    """Extrae texto plano de HTML, ignorando script/style/nav/footer/header.
+
+    Usa un contador de profundidad en vez de un booleano para que los tags
+    anidados (p.ej. ``<nav><footer>...</footer></nav>``) se manejen correctamente.
+    """
+
     def __init__(self):
         super().__init__()
         self.text_parts = []
-        self._skip = False
+        self._skip_depth = 0
         self._skip_tags = {'script', 'style', 'nav', 'footer', 'header'}
 
     def handle_starttag(self, tag, attrs):
         if tag in self._skip_tags:
-            self._skip = True
+            self._skip_depth += 1
         if tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
             self.text_parts.append('\n' + '#' * int(tag[1]) + ' ')
         if tag in ('p', 'div', 'li', 'br', 'tr', 'td', 'th', 'section'):
             self.text_parts.append('\n')
 
     def handle_endtag(self, tag):
-        if tag in self._skip_tags:
-            self._skip = False
+        if tag in self._skip_tags and self._skip_depth > 0:
+            self._skip_depth -= 1
 
     def handle_data(self, data):
-        if not self._skip:
+        if self._skip_depth == 0:
             self.text_parts.append(data)
 
 
@@ -271,3 +277,40 @@ def search_idee_service(query: str, **kwargs) -> str:
     )
 
     return "\n".join(summary_lines)
+
+
+# ────────────────────────────── Detección de objetos ML ──────────────────────────────
+
+@register("listDetectors")
+def list_detectors_tool(**kwargs) -> str:
+    """Lista los detectores ML disponibles en el servidor."""
+    from agent.ml.registry import list_detectors
+
+    detectors = list_detectors()
+    if not detectors:
+        return json.dumps(
+            {"message": "No hay detectores ML registrados en el servidor."},
+            ensure_ascii=False,
+        )
+
+    lines = [f"Detectores disponibles ({len(detectors)}):"]
+    for d in detectors:
+        lines.append(f"• **{d['label']}** (`{d['name']}`): {d['description']}")
+
+    return "\n".join(lines)
+
+
+@register("detectObjects")
+def detect_objects_tool(detector: str, bbox: dict, srs: str = "EPSG:3857",
+                        wms_url: str = None, wms_layer: str = None,
+                        **kwargs) -> str:
+    """Ejecuta un detector ML sobre la zona indicada y devuelve GeoJSON."""
+    from agent.ml.inference import run_detection
+
+    return run_detection(
+        detector_name=detector,
+        bbox=bbox,
+        srs=srs,
+        wms_url=wms_url,
+        wms_layer=wms_layer,
+    )

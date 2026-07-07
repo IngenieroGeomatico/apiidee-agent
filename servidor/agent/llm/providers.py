@@ -1,4 +1,3 @@
-from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 
 from django.conf import settings
@@ -18,13 +17,34 @@ class ChatResponse:
         return len(self.tool_calls) > 0
 
 
-class BaseLLMProvider(ABC):
-    """Proveedor base abstracto para modelos de lenguaje."""
+class BaseLLMProvider:
+    """Proveedor base para modelos de lenguaje.
 
-    @abstractmethod
+    Las subclases solo necesitan inicializar ``self.llm`` con un objeto
+    LangChain compatible (ChatOpenAI, ChatGoogleGenerativeAI, etc.).
+    El método ``chat()`` es común a todos los proveedores.
+    """
+
+    llm = None  # Las subclases lo inicializan en __init__
+
     def chat(self, messages: List[Dict], tools: Optional[List] = None) -> ChatResponse:
-        """Envía una lista de mensajes al LLM y devuelve una respuesta."""
-        pass
+        """Envía mensajes al LLM y devuelve una ChatResponse con texto y/o tool calls."""
+        lc_messages = [self._convert_message(m) for m in messages]
+
+        llm = self.llm
+        if tools:
+            llm = self.llm.bind_tools(tools)
+
+        response = llm.invoke(lc_messages)
+
+        if hasattr(response, "tool_calls") and response.tool_calls:
+            tool_calls = [
+                {"name": tc["name"], "args": tc["args"], "id": tc.get("id", "")}
+                for tc in response.tool_calls
+            ]
+            return ChatResponse(content=response.content or "", tool_calls=tool_calls)
+
+        return ChatResponse(content=response.content)
 
     @staticmethod
     def _convert_message(msg: dict):
@@ -47,7 +67,7 @@ class BaseLLMProvider(ABC):
 
 
 class OpenAICompatibleProvider(BaseLLMProvider):
-    """Generic provider for any OpenAI-compatible API endpoint."""
+    """Proveedor genérico para cualquier endpoint compatible con la API de OpenAI."""
 
     def __init__(self, base_url: str, api_key: str, model: str):
         """Configura el cliente LLM apuntando a una URL compatible con OpenAI."""
@@ -60,25 +80,6 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             base_url=base_url,
             temperature=0.1,
         )
-
-    def chat(self, messages, tools=None):
-        """Envía mensajes al LLM y maneja tool calls si están presentes."""
-        lc_messages = [self._convert_message(m) for m in messages]
-
-        llm = self.llm
-        if tools:
-            llm = self.llm.bind_tools(tools)
-
-        response = llm.invoke(lc_messages)
-
-        if hasattr(response, "tool_calls") and response.tool_calls:
-            tool_calls = [
-                {"name": tc["name"], "args": tc["args"], "id": tc.get("id", "")}
-                for tc in response.tool_calls
-            ]
-            return ChatResponse(content=response.content or "", tool_calls=tool_calls)
-
-        return ChatResponse(content=response.content)
 
 
 class OpenAIProvider(BaseLLMProvider):
@@ -97,26 +98,6 @@ class OpenAIProvider(BaseLLMProvider):
             temperature=0.1,
         )
 
-    def chat(self, messages, tools=None):
-        """Envía mensajes al LLM y maneja tool calls si están presentes."""
-        lc_messages = [self._convert_message(m) for m in messages]
-
-        llm = self.llm
-        if tools:
-            llm = self.llm.bind_tools(tools)
-
-        response = llm.invoke(lc_messages)
-
-        if hasattr(response, "tool_calls") and response.tool_calls:
-            tool_calls = [
-                {"name": tc["name"], "args": tc["args"], "id": tc.get("id", "")}
-                for tc in response.tool_calls
-            ]
-            return ChatResponse(content=response.content or "", tool_calls=tool_calls)
-
-        return ChatResponse(content=response.content)
-
-
 class GeminiProvider(BaseLLMProvider):
     """Proveedor para Gemini (Google Generative AI)."""
 
@@ -133,21 +114,3 @@ class GeminiProvider(BaseLLMProvider):
             temperature=0.1,
         )
 
-    def chat(self, messages, tools=None):
-        """Envía mensajes al LLM y maneja tool calls si están presentes."""
-        lc_messages = [self._convert_message(m) for m in messages]
-
-        llm = self.llm
-        if tools:
-            llm = self.llm.bind_tools(tools)
-
-        response = llm.invoke(lc_messages)
-
-        if hasattr(response, "tool_calls") and response.tool_calls:
-            tool_calls = [
-                {"name": tc["name"], "args": tc["args"], "id": tc.get("id", "")}
-                for tc in response.tool_calls
-            ]
-            return ChatResponse(content=response.content or "", tool_calls=tool_calls)
-
-        return ChatResponse(content=response.content)

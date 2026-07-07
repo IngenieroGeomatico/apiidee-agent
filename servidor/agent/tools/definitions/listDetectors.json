@@ -1,0 +1,9 @@
+{
+  "name": "listDetectors",
+  "description": "Lista todos los detectores de objetos ML disponibles en el servidor. Devuelve nombre, etiqueta y descripción de cada detector. Llama a esta herramienta antes de usar 'detectObjects' para saber qué detectores existen.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  }
+}
