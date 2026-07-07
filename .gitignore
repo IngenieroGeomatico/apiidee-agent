@@ -37,6 +37,14 @@ media/
 backend/vectorstore_data/
 servidor/vectorstore_data/
 
+# ML model weights (downloaded/trained, not tracked)
+servidor/ml_models/*.onnx
+servidor/ml_models/*.pt
+servidor/ml_models/*.pth
+servidor/ml_models/*.tflite
+servidor/ml_models/*.h5
+servidor/ml_models/*.pb
+
 # IDE
 .vscode/
 .idea/
