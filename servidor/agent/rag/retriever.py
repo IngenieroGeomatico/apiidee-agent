@@ -21,14 +21,16 @@ _faiss_store_cache: Dict[str, object] = {}
 def retrieve_context(query: str, k: int = 5) -> List[Dict]:
     """Recupera los top-k fragmentos más relevantes de todos los repositorios indexados.
 
-    Devuelve una lista de diccionarios con las claves 'content' y 'metadata'.
-    Devuelve una lista vacía si no existe ningún índice.
+    Devuelve una lista de dicts con las claves ``content`` y ``metadata``,
+    ordenados por relevancia (menor distancia FAISS = más relevante) a
+    través de todos los stores. Devuelve una lista vacía si no existe
+    ningún índice.
     """
     vectorstore_dir = Path(settings.VECTORSTORE_DIR)
     if not vectorstore_dir.exists():
         return []
 
-    results: List[Dict] = []
+    scored_results: List[tuple] = []  # (score, dict)
 
     for repo_dir in vectorstore_dir.iterdir():
         if not repo_dir.is_dir():
@@ -41,17 +43,19 @@ def retrieve_context(query: str, k: int = 5) -> List[Dict]:
             store = _get_faiss_store(str(repo_dir))
             if store is None:
                 continue
-            docs = store.similarity_search(query, k=k)
-            for doc in docs:
-                results.append({
+            docs_and_scores = store.similarity_search_with_score(query, k=k)
+            for doc, score in docs_and_scores:
+                scored_results.append((score, {
                     "content": doc.page_content,
                     "metadata": doc.metadata,
-                })
+                }))
         except Exception:
             logger.exception("Error querying FAISS index at %s", repo_dir)
             continue
 
-    return results[:k]
+    # Sort by FAISS distance (lower = more relevant) and return top-k
+    scored_results.sort(key=lambda x: x[0])
+    return [item for _, item in scored_results[:k]]
 
 
 def _get_faiss_store(store_path: str):
