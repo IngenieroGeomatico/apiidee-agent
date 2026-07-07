@@ -1,13 +1,13 @@
 """
-Skill Registry — Auto-discovers skill definitions from YAML files.
+Skill Registry — Descubre automáticamente definiciones de skills desde archivos YAML.
 
-Skills are defined as YAML files in skills/definitions/*.yaml.
-Each file contains: name, description, tools (list), and prompt (text).
+Las skills se definen como archivos YAML en skills/definitions/*.yaml.
+Cada archivo contiene: name, description, tools (lista) y prompt (texto).
 
-To add a new skill: create a new .yaml file in skills/definitions/.
-No Python code changes needed.
+Para añadir una nueva skill: crear un nuevo archivo .yaml en skills/definitions/.
+No se necesitan cambios en código Python.
 
-For advanced skills that need custom logic, extend BaseSkill and register manually.
+Para skills avanzadas que necesiten lógica personalizada, extender BaseSkill y registrar manualmente.
 """
 import logging
 from abc import ABC, abstractmethod
@@ -20,7 +20,7 @@ DEFINITIONS_DIR = Path(__file__).resolve().parent / "definitions"
 
 
 class BaseSkill(ABC):
-    """Base class for all skills. Extend this for custom skills with logic."""
+    """Clase base para todas las skills. Extiende esto para skills personalizadas con lógica."""
 
     @property
     @abstractmethod
@@ -48,7 +48,7 @@ class BaseSkill(ABC):
 
 
 class YamlSkill(BaseSkill):
-    """A skill loaded from a YAML definition file."""
+    """Una skill cargada desde un archivo de definición YAML."""
 
     def __init__(self, data: dict):
         """Inicializa una habilidad a partir de un diccionario con los datos del YAML."""
@@ -79,7 +79,7 @@ class YamlSkill(BaseSkill):
 
 
 class SkillRegistry:
-    """Singleton registry that collects and manages all active skills."""
+    """Registro singleton que recolecta y gestiona todas las skills activas."""
 
     _instance = None
     _skills: List[BaseSkill] = []
@@ -95,7 +95,7 @@ class SkillRegistry:
 
     @classmethod
     def _load_definitions(cls):
-        """Scan definitions/ directory and load all .yaml skill files."""
+        """Escanea el directorio definitions/ y carga todos los archivos de skill .yaml."""
         if cls._loaded:
             return
 
@@ -133,7 +133,7 @@ class SkillRegistry:
 
     @classmethod
     def register(cls, skill: BaseSkill):
-        """Register a skill programmatically (for custom skills not defined in YAML)."""
+        """Registra una skill programáticamente (para skills personalizadas no definidas en YAML)."""
         if not any(s.name == skill.name for s in cls._skills):
             cls._skills.append(skill)
 
@@ -145,7 +145,7 @@ class SkillRegistry:
 
     @classmethod
     def get_system_prompt(cls) -> str:
-        """Combine all skill prompt additions into one string."""
+        """Combina todos los añadidos de prompt de las skills en una sola cadena."""
         cls._load_definitions()
         parts = []
         for skill in cls._skills:

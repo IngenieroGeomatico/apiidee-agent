@@ -2,7 +2,7 @@ from django.db import models
 
 
 class KnowledgeSource(models.Model):
-    """A source of knowledge that can be indexed for RAG retrieval."""
+    """Una fuente de conocimiento que puede ser indexada para recuperación RAG."""
 
     class SourceType(models.TextChoices):
         GIT = "git", "Git Repository"

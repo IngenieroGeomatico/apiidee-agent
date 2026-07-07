@@ -1,12 +1,13 @@
-"""RAG retriever — queries FAISS indexes for relevant context.
+"""Recuperador RAG — consulta índices FAISS para obtener contexto relevante.
 
-FAISS stores are loaded once and cached in memory to avoid
-repeated disk I/O on every request.
+Los almacenes FAISS se cargan una vez y se guardan en caché en memoria
+para evitar E/S repetitiva de disco en cada solicitud.
 """
+
+from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, List
 
 from django.conf import settings
 
@@ -14,8 +15,8 @@ from .embeddings import get_embeddings
 
 logger = logging.getLogger(__name__)
 
-# In-memory cache: repo_dir -> FAISS store instance
-_faiss_store_cache: Dict[str, object] = {}
+# Caché en memoria: repo_dir -> instancia del almacén FAISS
+_faiss_store_cache: dict[str, object] = {}
 
 
 def retrieve_context(query: str, k: int = 5) -> List[Dict]:
@@ -30,7 +31,7 @@ def retrieve_context(query: str, k: int = 5) -> List[Dict]:
     if not vectorstore_dir.exists():
         return []
 
-    scored_results: List[tuple] = []  # (score, dict)
+    scored_results: list[tuple] = []  # (score, dict)
 
     for repo_dir in vectorstore_dir.iterdir():
         if not repo_dir.is_dir():
@@ -50,7 +51,7 @@ def retrieve_context(query: str, k: int = 5) -> List[Dict]:
             logger.exception("Error querying FAISS index at %s", repo_dir)
             continue
 
-    # Sort by FAISS distance (lower = more relevant) and return top-k
+    # Ordenar por distancia FAISS (menor = más relevante) y devolver top-k
     scored_results.sort(key=lambda x: x[0])
     return [item for _, item in scored_results[:k]]
 

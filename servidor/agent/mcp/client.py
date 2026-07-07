@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 class MCPClient:
-    """Client for a single MCP server using JSON-RPC over HTTP."""
+    """Cliente para un único servidor MCP usando JSON-RPC sobre HTTP."""
 
     def __init__(self, name: str, url: str, timeout: int = 30):
         self.name = name
@@ -44,12 +44,12 @@ class MCPClient:
         return data.get("result", {})
 
     def list_tools(self) -> List[dict]:
-        """List all tools available from this MCP server."""
+        """Enumera todas las herramientas disponibles de este servidor MCP."""
         result = self._request("tools/list")
         return result.get("tools", [])
 
     def call_tool(self, name: str, arguments: dict) -> Any:
-        """Call a tool on this MCP server and return its result."""
+        """Ejecuta una herramienta en este servidor MCP y devuelve su resultado."""
         result = self._request("tools/call", {
             "name": name,
             "arguments": arguments,

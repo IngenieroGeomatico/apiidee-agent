@@ -10,6 +10,17 @@ class AgentConfig(AppConfig):
         """Inicializa el registro de herramientas, habilidades y MCP al arrancar."""
         from django.conf import settings
 
+        # Auto-descargar modelos ML si faltan (solo una vez)
+        try:
+            from ml_models.download import ensure_models
+            ensure_models()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "No se pudieron verificar modelos ML. "
+                "Ejecuta: python -m ml_models.download",
+            )
+
         from agent.tools.registry import get_all_tools, register_mcp_tools
         from agent.skills.base import SkillRegistry
 

@@ -7,10 +7,10 @@ from .providers import BaseLLMProvider, GeminiProvider, OpenAICompatibleProvider
 
 def get_configured_providers() -> List[Dict]:
     """
-    Return all configured providers with their available models.
+    Devuelve todos los proveedores configurados con sus modelos disponibles.
 
-    Each entry: { "name": str, "models": [{ "id": str, "label": str }], "default_model": str }
-    This is safe to expose to the client (no API keys).
+    Cada entrada: { "name": str, "models": [{ "id": str, "label": str }], "default_model": str }
+    Esto es seguro de exponer al cliente (sin API keys).
     """
     result = []
     for provider in settings.LLM_PROVIDERS:
@@ -28,13 +28,13 @@ def get_configured_providers() -> List[Dict]:
 def get_provider(provider_name: str, model: str,
                  api_key: Optional[str] = None) -> BaseLLMProvider:
     """
-    Get a configured LLM provider by name and model.
+    Obtiene un proveedor LLM configurado por nombre y modelo.
 
-    Looks up the provider in settings.LLM_PROVIDERS and creates
-    an OpenAICompatibleProvider with the matching base_url and api_key.
+    Busca el proveedor en settings.LLM_PROVIDERS y crea
+    un OpenAICompatibleProvider con el base_url y api_key correspondientes.
 
-    If api_key is provided, it overrides the configured key (for
-    user-provided keys from the frontend).
+    Si se proporciona api_key, esta sobrescribe la clave configurada (para
+    claves proporcionadas por el usuario desde el frontend).
     """
     for provider in settings.LLM_PROVIDERS:
         if provider["name"].lower() == provider_name.lower():
@@ -52,8 +52,8 @@ def get_provider(provider_name: str, model: str,
 
 def get_llm_provider() -> BaseLLMProvider:
     """
-    Legacy fallback: return a provider based on LLM_PROVIDER env var.
-    Used when no provider is specified by the client.
+    Fallback heredado: devuelve un proveedor basado en la variable de entorno LLM_PROVIDER.
+    Se usa cuando el cliente no especifica ningún proveedor.
     """
     provider_name = settings.LLM_PROVIDER
 

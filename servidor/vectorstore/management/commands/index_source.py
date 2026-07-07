@@ -1,4 +1,4 @@
-"""Management command to index a knowledge source into the FAISS vector store."""
+"""Comando de gestión para indexar una fuente de conocimiento en el almacén vectorial FAISS."""
 
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
@@ -8,28 +8,28 @@ from vectorstore.models import KnowledgeSource
 
 
 class Command(BaseCommand):
-    help = 'Index a knowledge source (git repo or web page) for RAG retrieval.'
+    help = 'Indexa una fuente de conocimiento (repo git o página web) para recuperación RAG.'
 
     def add_arguments(self, parser):
-        parser.add_argument('url', type=str, help='URL of the source to index')
+        parser.add_argument('url', type=str, help='URL de la fuente a indexar')
         parser.add_argument(
             '--type',
             type=str,
             default='git',
             choices=['git', 'web'],
-            help='Source type: git (repository) or web (documentation page)',
+            help='Tipo de fuente: git (repositorio) o web (página de documentación)',
         )
         parser.add_argument(
             '--name',
             type=str,
             default=None,
-            help='Source name (defaults to last segment of URL)',
+            help='Nombre de la fuente (por defecto, el último segmento de la URL)',
         )
         parser.add_argument(
             '--batch-size',
             type=int,
             default=100,
-            help='Chunks per embedding batch (lower = less memory, default: 100)',
+            help='Fragmentos por lote de embeddings (menor = menos memoria, por defecto: 100)',
         )
 
     def handle(self, *args, **options):

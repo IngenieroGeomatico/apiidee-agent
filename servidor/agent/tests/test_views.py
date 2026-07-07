@@ -59,7 +59,7 @@ class ConversationCRUDTests(TestCase):
     def test_list_conversations_includes_message_count(self):
         """GET /api/conversations/ incluye message_count en cada elemento."""
         Message.objects.create(
-            conversation=self.conversation, role=Message.Role.USER, content="hola"
+            conversation=self.conversation, role=Message.Role.USER, content=[{"type": "text", "text": "hola"}]
         )
         response = self.client.get("/api/conversations/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -112,12 +112,12 @@ class ConversationCRUDTests(TestCase):
     def test_messages_returns_ordered_messages(self):
         """GET /api/conversations/{id}/messages/ devuelve mensajes ordenados por fecha."""
         Message.objects.create(
-            conversation=self.conversation, role=Message.Role.USER, content="primero"
+            conversation=self.conversation, role=Message.Role.USER, content=[{"type": "text", "text": "primero"}]
         )
         Message.objects.create(
             conversation=self.conversation,
             role=Message.Role.ASSISTANT,
-            content="segundo",
+            content=[{"type": "text", "text": "segundo"}],
         )
         url = f"/api/conversations/{self.conversation.id}/messages/"
         response = self.client.get(url)
@@ -170,8 +170,9 @@ class BuildHistoryTests(TestCase):
         """Mensajes con role USER se mapean a 'user'."""
         Message.objects.create(
             conversation=self.conversation,
-            role=Message.Role.USER,
-            content="hola",
+            role=Message.Role.SYSTEM,
+            content=[{"type": "tool_result", "tool_name": "zoomTo", "content": {}, "success": true, "tool_call_id": "call_123"}],
+            metadata={"role": "tool", "tool_call_id": "call_123", "tool_name": "zoomTo"},
         )
         result = _build_history(self.conversation)
         self.assertEqual(result[0]["role"], "user")
@@ -181,7 +182,7 @@ class BuildHistoryTests(TestCase):
         Message.objects.create(
             conversation=self.conversation,
             role=Message.Role.ASSISTANT,
-            content="respuesta",
+            content=[{"type": "text", "text": "respuesta"}],
         )
         result = _build_history(self.conversation)
         self.assertEqual(result[0]["role"], "assistant")
@@ -211,7 +212,7 @@ class BuildHistoryTests(TestCase):
         Message.objects.create(
             conversation=self.conversation,
             role=Message.Role.ASSISTANT,
-            content="Moviendo el mapa...",
+            content=[{"type": "text", "text": "Moviendo el mapa..."}],
             metadata={"tool_calls": tool_calls},
         )
         result = _build_history(self.conversation)
@@ -236,7 +237,7 @@ class BuildHistoryTests(TestCase):
             Message.objects.create(
                 conversation=self.conversation,
                 role=Message.Role.USER,
-                content=f"Msg {i}",
+                content=[{"type": "text", "text": f"Msg {i}"}],
             )
         result = _build_history(self.conversation)
         self.assertEqual(len(result), 10)

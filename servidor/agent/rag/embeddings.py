@@ -1,11 +1,11 @@
-"""Embeddings factory — picks the best available embedding provider.
+"""Fábrica de embeddings — elige el mejor proveedor de embeddings disponible.
 
-Configure via EMBEDDINGS_PROVIDER in .env:
-  - "openai"  → OpenAIEmbeddings (requires OPENAI_API_KEY)
-  - "gemini"  → GoogleGenerativeAIEmbeddings (requires GOOGLE_API_KEY)
-  - "local"   → FastEmbedEmbeddings (free, offline, ~80MB model download)
+Configurar mediante EMBEDDINGS_PROVIDER en .env:
+  - "openai"  → OpenAIEmbeddings (requiere OPENAI_API_KEY)
+  - "gemini"  → GoogleGenerativeAIEmbeddings (requiere GOOGLE_API_KEY)
+  - "local"   → FastEmbedEmbeddings (gratuito, offline, descarga de ~80MB)
 
-Uses a singleton cache so the embedding model is only created once.
+Utiliza un caché singleton para que el modelo de embedding se cree solo una vez.
 """
 
 import logging
@@ -37,7 +37,7 @@ def get_embeddings():
     elif provider == 'local':
         instance = _local_embeddings(model)
     else:
-        # Auto-detect fallback
+        # Detección automática como fallback
         if settings.OPENAI_API_KEY:
             instance = _openai_embeddings(model)
         elif settings.GOOGLE_API_KEY:
