@@ -1,0 +1,38 @@
+{
+  "name": "detectObjects",
+  "description": "Detecta objetos en la zona visible del mapa usando un modelo de machine learning local. Descarga una imagen aérea (ortofoto PNOA) de la zona indicada por el bbox, ejecuta el detector seleccionado y devuelve un GeoJSON con las detecciones. Usa 'listDetectors' para ver qué detectores hay disponibles antes de llamar a esta herramienta.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "detector": {
+        "type": "string",
+        "description": "Nombre del detector a usar (ej: 'pool_detector'). Usa 'listDetectors' para ver los disponibles."
+      },
+      "bbox": {
+        "type": "object",
+        "description": "Extensión geográfica de la zona a analizar. Si no se proporciona, usa el extent actual del mapa (getMapExtent).",
+        "properties": {
+          "minX": { "type": "number" },
+          "minY": { "type": "number" },
+          "maxX": { "type": "number" },
+          "maxY": { "type": "number" }
+        },
+        "required": ["minX", "minY", "maxX", "maxY"]
+      },
+      "srs": {
+        "type": "string",
+        "description": "Sistema de referencia del bbox (por defecto EPSG:3857)",
+        "default": "EPSG:3857"
+      },
+      "wms_url": {
+        "type": "string",
+        "description": "URL del servicio WMS para obtener la imagen. Por defecto usa la ortofoto PNOA del IGN."
+      },
+      "wms_layer": {
+        "type": "string",
+        "description": "Nombre de la capa WMS. Por defecto 'OI.OrthoimageCoverage' (PNOA)."
+      }
+    },
+    "required": ["detector", "bbox"]
+  }
+}
