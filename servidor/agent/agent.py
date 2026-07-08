@@ -22,23 +22,40 @@ logger = logging.getLogger(__name__)
 
 
 class AgentResponse:
-    """Respuesta del agente — lista de content blocks (formato Anthropic/MCP)."""
+    """Respuesta del agente — lista de content blocks (formato Anthropic/MCP).
 
-    def __init__(self, content: list, sources: list = None):
+    Attributes:
+        content: Lista de bloques (text, tool_call, layer).
+        sources: Metadatos RAG de las fuentes consultadas.
+        layers: Capas GeoJSON generadas por herramientas del servidor
+                (ej: detecciones ML).  Se propagan hasta la vista para
+                incluirlas en la respuesta HTTP sin usar estado global.
+    """
+
+    def __init__(self, content: list, sources: list = None,
+                 layers: list = None):
         self.content = content
         self.sources = sources or []
+        self.layers = layers or []
 
     @classmethod
-    def text(cls, text: str, sources: list = None) -> "AgentResponse":
-        return cls(content=[{"type": "text", "text": text}], sources=sources or [])
+    def text(cls, text: str, sources: list = None,
+             layers: list = None) -> "AgentResponse":
+        return cls(
+            content=[{"type": "text", "text": text}],
+            sources=sources or [],
+            layers=layers or [],
+        )
 
     @classmethod
     def tool_call(cls, text: str, tool_calls: list,
-                  sources: list = None) -> "AgentResponse":
+                  sources: list = None,
+                  layers: list = None) -> "AgentResponse":
         blocks = [{"type": "text", "text": text}]
         if tool_calls:
             blocks.append({"type": "tool_call", "toolCalls": tool_calls})
-        return cls(content=blocks, sources=sources or [])
+        return cls(content=blocks, sources=sources or [],
+                   layers=layers or [])
 
     @property
     def text_content(self) -> str:
@@ -124,100 +141,136 @@ class Agent:
     def _run_llm_loop(self, llm_messages: list, rag_results: list,
                       max_iterations: int = 5) -> AgentResponse:
         """
-        Llama al LLM en un bucle, ejecutando herramientas MCP en línea.
+        Llama al LLM en un bucle, ejecutando herramientas del servidor/MCP en línea.
 
         - Si el LLM devuelve solo herramientas del mapa → devolverlas como tool_call.
-        - Si el LLM devuelve herramientas MCP → ejecutarlas, retroalimentar resultados, repetir.
+        - Si el LLM devuelve herramientas server/MCP → ejecutarlas, retroalimentar resultados, repetir.
         - Si el LLM devuelve texto → devolver como texto.
+
+        Los resultados de herramientas del servidor que contengan GeoJSON
+        (FeatureCollection) se acumulan en ``layers`` y se incluyen en la
+        respuesta final para que la vista los envíe al frontend.
         """
         tools = get_langchain_tools()
+        sources = [chunk["metadata"] for chunk in rag_results] if rag_results else []
+        layers: list[dict] = []
 
-        for iteration in range(max_iterations):
+        for _iteration in range(max_iterations):
             response = self.provider.chat(
                 llm_messages,
                 tools=tools if tools else None,
             )
 
             if not response.has_tool_calls:
-                return self._build_response(response, rag_results)
+                return self._build_response(response, sources, layers)
 
-            server_calls = [
-                tc for tc in response.tool_calls
-                if has_executor(tc["name"])
-            ]
-            mcp_calls = [
-                tc for tc in response.tool_calls
-                if not has_executor(tc["name"])
-                and self.mcp_manager and self.mcp_manager.is_mcp_tool(tc["name"])
-            ]
-            map_calls = [
-                tc for tc in response.tool_calls
-                if not has_executor(tc["name"])
-                and not (self.mcp_manager and self.mcp_manager.is_mcp_tool(tc["name"]))
-            ]
+            server_calls, mcp_calls, map_calls = self._classify_tool_calls(
+                response.tool_calls,
+            )
 
             if server_calls or mcp_calls:
                 for tc in server_calls:
-                    try:
-                        executor = get_executor(tc["name"])
-                        result = executor(**tc["args"])
-                        formatted = json.dumps(
-                            {"result": result}, ensure_ascii=False
-                        ) if not isinstance(result, str) else result
-                        logger.info("Server tool '%s' executed successfully", tc["name"])
-                    except Exception as e:
-                        logger.exception("Server tool '%s' failed", tc["name"])
-                        formatted = json.dumps({"error": str(e)}, ensure_ascii=False)
-
-                    llm_messages.append({
-                        "role": "assistant",
-                        "content": response.content or "",
-                        "tool_calls": [tc],
-                    })
-                    llm_messages.append({
-                        "role": "tool",
-                        "content": formatted,
-                        "tool_call_id": tc["id"],
-                    })
+                    formatted = self._execute_server_tool(tc)
+                    self._append_tool_messages(llm_messages, response, tc, formatted)
+                    self._collect_geojson_layer(formatted, layers)
 
                 for tc in mcp_calls:
-                    try:
-                        result = self.mcp_manager.execute_tool(tc["name"], tc["args"])
-                        formatted = self._format_mcp_result(result)
-                        logger.info("MCP tool '%s' executed successfully", tc["name"])
-                    except Exception as e:
-                        logger.exception("MCP tool '%s' failed", tc["name"])
-                        formatted = json.dumps({"error": str(e)}, ensure_ascii=False)
+                    formatted = self._execute_mcp_tool(tc)
+                    self._append_tool_messages(llm_messages, response, tc, formatted)
 
-                    llm_messages.append({
-                        "role": "assistant",
-                        "content": response.content or "",
-                        "tool_calls": [tc],
-                    })
-                    llm_messages.append({
-                        "role": "tool",
-                        "content": formatted,
-                        "tool_call_id": tc["id"],
-                    })
-
-                # If there are also map calls, return them so the frontend can execute them
                 if map_calls:
-                        return AgentResponse.tool_call(
-                            text=response.content or "Ejecutando acción en el mapa...",
-                            tool_calls=map_calls,
-                            sources=[chunk["metadata"] for chunk in rag_results] if rag_results else [],
-                        )
+                    return AgentResponse.tool_call(
+                        text=response.content or "Ejecutando acción en el mapa...",
+                        tool_calls=map_calls,
+                        sources=sources,
+                        layers=layers,
+                    )
             else:
                 return AgentResponse.tool_call(
                     text=response.content or "Ejecutando acción en el mapa...",
                     tool_calls=map_calls,
-                    sources=[chunk["metadata"] for chunk in rag_results] if rag_results else [],
+                    sources=sources,
+                    layers=layers,
                 )
 
         logger.warning("MCP iteration limit (%d) reached", max_iterations)
         return AgentResponse.text(
             "Se alcanzó el límite de iteraciones de herramientas MCP.",
         )
+
+    def _classify_tool_calls(self, tool_calls: list) -> tuple[list, list, list]:
+        """Clasifica tool calls en server-side, MCP y map (frontend)."""
+        server_calls = []
+        mcp_calls = []
+        map_calls = []
+        for tc in tool_calls:
+            if has_executor(tc["name"]):
+                server_calls.append(tc)
+            elif self.mcp_manager and self.mcp_manager.is_mcp_tool(tc["name"]):
+                mcp_calls.append(tc)
+            else:
+                map_calls.append(tc)
+        return server_calls, mcp_calls, map_calls
+
+    @staticmethod
+    def _execute_server_tool(tc: dict) -> str:
+        """Ejecuta una herramienta del servidor y devuelve el resultado formateado."""
+        try:
+            executor = get_executor(tc["name"])
+            result = executor(**tc["args"])
+            formatted = (
+                json.dumps({"result": result}, ensure_ascii=False)
+                if not isinstance(result, str) else result
+            )
+            logger.info("Server tool '%s' executed successfully", tc["name"])
+            return formatted
+        except Exception as e:
+            logger.exception("Server tool '%s' failed", tc["name"])
+            return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+    def _execute_mcp_tool(self, tc: dict) -> str:
+        """Ejecuta una herramienta MCP y devuelve el resultado formateado."""
+        try:
+            result = self.mcp_manager.execute_tool(tc["name"], tc["args"])
+            formatted = self._format_mcp_result(result)
+            logger.info("MCP tool '%s' executed successfully", tc["name"])
+            return formatted
+        except Exception as e:
+            logger.exception("MCP tool '%s' failed", tc["name"])
+            return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+    @staticmethod
+    def _append_tool_messages(llm_messages: list, response, tc: dict,
+                              formatted: str):
+        """Añade los mensajes de asistente + resultado de herramienta al historial."""
+        llm_messages.append({
+            "role": "assistant",
+            "content": response.content or "",
+            "tool_calls": [tc],
+        })
+        llm_messages.append({
+            "role": "tool",
+            "content": formatted,
+            "tool_call_id": tc["id"],
+        })
+
+    @staticmethod
+    def _collect_geojson_layer(tool_result: str, layers: list[dict]):
+        """Si el resultado de una herramienta es un GeoJSON FeatureCollection, lo acumula en layers."""
+        try:
+            parsed = json.loads(tool_result)
+            if isinstance(parsed, dict) and parsed.get("type") == "FeatureCollection":
+                label = "Detecciones"
+                features = parsed.get("features", [])
+                if features and features[0].get("properties", {}).get("label"):
+                    label = features[0]["properties"]["label"] + " detectados"
+                layers.append({
+                    "type": "geojson",
+                    "source": parsed,
+                    "name": label,
+                })
+        except (json.JSONDecodeError, TypeError):
+            pass
 
     @staticmethod
     def _format_mcp_result(result) -> str:
@@ -234,11 +287,12 @@ class Agent:
             return "\n".join(texts)
         return json.dumps(result, ensure_ascii=False)
 
-    def _build_response(self, response, rag_results):
-        sources = [chunk["metadata"] for chunk in rag_results] if rag_results else []
+    def _build_response(self, response, sources: list,
+                        layers: list = None):
         return AgentResponse.text(
             response.content,
             sources=sources,
+            layers=layers or [],
         )
 
     def _build_system_prompt(self, rag_results: list,
