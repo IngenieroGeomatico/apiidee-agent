@@ -454,16 +454,21 @@ No hay que tocar Python. El sistema auto-descubre los JSON al arrancar.
 
 ### Tools disponibles
 
-| Tool | Tipo | Descripcion |
-|------|------|-------------|
-| `getMapCenter` | Lectura | Coordenadas del centro del mapa |
-| `getCurrentZoom` | Lectura | Nivel de zoom actual |
-| `listActiveLayers` | Lectura | Lista de capas activas |
-| `getMapExtent` | Lectura | Bounding box de la vista actual |
-| `addWMSLayer` | Escritura | Anadir capa WMS al mapa |
-| `zoomTo` | Escritura | Mover el mapa a coordenadas |
-| `removeLayer` | Escritura | Eliminar una capa por nombre |
-| `setZoom` | Escritura | Cambiar nivel de zoom |
+| Tool | Tipo | Ejecutor | Descripcion |
+|------|------|----------|-------------|
+| `getMapCenter` | Lectura | Frontend | Coordenadas del centro del mapa |
+| `getCurrentZoom` | Lectura | Frontend | Nivel de zoom actual |
+| `listActiveLayers` | Lectura | Frontend | Lista de capas activas |
+| `getMapExtent` | Lectura | Frontend | Bounding box de la vista actual |
+| `addLayer` | Escritura | Frontend | Anadir capa al mapa (WMS, WMTS, GeoJSON, etc.) |
+| `zoomTo` | Escritura | Frontend | Mover el mapa a coordenadas |
+| `removeLayer` | Escritura | Frontend | Eliminar una capa por nombre |
+| `setZoom` | Escritura | Frontend | Cambiar nivel de zoom |
+| `fetchWebPage` | Lectura | Servidor | Descargar y extraer texto de una pagina web |
+| `geocodePlace` | Lectura | Servidor | Geocodificar un lugar con Cartociudad |
+| `searchIdeeService` | Lectura | Servidor | Buscar servicios en el directorio IDEE (paralelo) |
+| `listDetectors` | Lectura | Servidor | Listar detectores ML disponibles |
+| `detectObjects` | Escritura | Servidor | Ejecutar detector ML sobre zona del mapa |
 
 ## Anadir skills
 
@@ -556,19 +561,92 @@ Si no configuras servidores MCP, el sistema funciona exactamente igual que antes
 | Agente Django | `python manage.py runserver` | 8000 | Sí |
 | Servidor MCP | `python test_mcp_server.py` | 8001 | Solo si usas MCP |
 
-## Mejoras de rendimiento recientes
+## Streaming (SSE)
 
-### Cache de embeddings
+El endpoint `chat/` soporta **streaming opcional** mediante Server-Sent Events (SSE). Cuando se activa, el texto de la respuesta se envía token a token al navegador, en vez de esperar a que el LLM termine toda la respuesta.
 
-El modelo de embeddings se crea una sola vez y se reusa en todas las peticiones (singleton). Esto evita el overhead de cargar el modelo en cada llamada a RAG.
+### Activar streaming
 
-### Cache de FAISS stores
+Añadir `"stream": true` en el body de la petición:
 
-Los indices FAISS se cargan desde disco una unica vez y se mantienen en memoria. Las consultas posteriores son instantaneas sin acceso a disco. Si se reindexa una fuente, llama a `clear_faiss_cache()` o reinicia el servidor.
+```json
+POST /api/conversations/{id}/chat/
+{
+  "content": "Llevame a Madrid",
+  "stream": true
+}
+```
 
-### Modelo de embeddings multilingüe
+Si `stream` es `false` o no se incluye, el endpoint se comporta exactamente igual que antes (respuesta JSON completa).
 
-El modelo local por defecto es `BAAI/bge-m3`, que soporta espanol y otros idiomas, a diferencia del anterior `bge-small-en-v1.5` que solo funcionaba bien en ingles.
+### Formato de eventos SSE
+
+La respuesta es `Content-Type: text/event-stream` con los siguientes eventos:
+
+| Evento | Datos | Descripcion |
+|--------|-------|-------------|
+| `text_delta` | `{"type": "text_delta", "text": "..."}` | Fragmento incremental de texto |
+| `tool_call` | `{"type": "tool_call", "toolCalls": [...]}` | Tool calls del mapa para el frontend |
+| `sources` | `{"type": "sources", "sources": [...]}` | Fuentes RAG consultadas |
+| `layer` | `{"type": "layer", "layer": {...}}` | Capa GeoJSON (detecciones ML) |
+| `done` | `{"type": "done"}` | Fin del stream |
+
+### Activar streaming en el plugin
+
+```javascript
+const chatAgent = new IDEE.plugin.ChatAgent({
+  backendUrl: 'http://localhost:8000/api',
+  stream: true,  // Activa streaming SSE
+});
+```
+
+## Deteccion de objetos (ML)
+
+El agente incluye un pipeline de deteccion de objetos sobre imagenes aereas. Actualmente soporta deteccion de **piscinas** usando un modelo YOLOv11n fine-tuned (~5 MB ONNX).
+
+### Como funciona
+
+1. El LLM decide usar la tool `detectObjects` cuando el usuario lo pide
+2. El servidor descarga la imagen de la zona via WMS (ortofoto PNOA por defecto)
+3. Ejecuta el detector ONNX sobre la imagen
+4. Devuelve un GeoJSON FeatureCollection con las detecciones
+5. El plugin carga el GeoJSON como capa en el mapa
+
+### Modelo
+
+El modelo se descarga y convierte automaticamente al arrancar el servidor:
+
+- **Origen**: [yourkln/pool-detection](https://github.com/yourkln/pool-detection) (YOLOv11n fine-tuned)
+- **Formato**: ONNX (~10 MB), se ejecuta con `onnxruntime` (sin PyTorch)
+- **Fallback**: Si el modelo no esta disponible, usa segmentacion por color con OpenCV
+
+```bash
+# Descarga manual del modelo
+cd servidor
+python -m ml_models.download
+```
+
+### Detectores disponibles
+
+| Detector | Modelo | Descripcion |
+|----------|--------|-------------|
+| `pool_detector` | YOLOv11n (ONNX) | Detecta piscinas en ortofotos |
+
+Para anadir nuevos detectores, crear una clase en `servidor/agent/ml/detectors/` heredando de `BaseDetector` y decorarla con `@detector`.
+
+## Rendimiento y thread-safety
+
+### Caches thread-safe
+
+Todos los caches del servidor estan protegidos con `threading.Lock` para garantizar thread-safety en servidores multi-hilo:
+
+- **Embeddings**: modelo singleton con double-check locking
+- **FAISS stores**: indices cargados una vez desde disco y cacheados en memoria
+- **Agent cache**: LRU de hasta 128 entradas por combinacion proveedor/modelo/key
+
+### Busqueda paralela de servicios IDEE
+
+La tool `searchIdeeService` consulta las 6 categorias del directorio IDEE en paralelo usando `ThreadPoolExecutor`, en vez de secuencialmente.
 
 ## Estructura del proyecto
 
@@ -583,26 +661,33 @@ apiidee-agent/
 │   │   ├── urls.py
 │   │   └── ...
 │   ├── agent/                        # App del agente
-│   │   ├── agent.py                  # Clase Agent (orquestador)
-│   │   ├── views.py                  # Wrapper HTTP (API REST)
+│   │   ├── agent.py                  # Clase Agent (orquestador, run + run_stream)
+│   │   ├── views.py                  # Wrapper HTTP (API REST + SSE streaming)
 │   │   ├── models.py                 # Conversation, Message
 │   │   ├── prompts.py                # System prompt
 │   │   ├── serializers.py            # DRF serializers
 │   │   ├── urls.py                   # Rutas API
 │   │   ├── llm/                      # Proveedores LLM
-│   │   │   ├── providers.py          # OpenAI, Gemini, OpenAICompatible
+│   │   │   ├── providers.py          # OpenAI, Gemini, OpenAICompatible (chat + stream)
 │   │   │   └── config.py             # Factory
 │   │   ├── rag/                      # Pipeline RAG
 │   │   │   ├── indexer.py            # BaseIndexer + GitRepoIndexer + WebIndexer
 │   │   │   ├── chunking.py           # Chunking por funciones/clases/headings
-│   │   │   ├── embeddings.py         # Embeddings factory (cache singleton)
-│   │   │   └── retriever.py          # Query FAISS (stores cacheadas)
+│   │   │   ├── embeddings.py         # Embeddings factory (cache thread-safe)
+│   │   │   └── retriever.py          # Query FAISS (stores cacheadas, thread-safe)
 │   │   ├── tools/                    # Definiciones de tools
 │   │   │   ├── registry.py           # Auto-descubre definitions/*.json
+│   │   │   ├── executors.py          # Tools server-side (geocode, IDEE, ML)
 │   │   │   └── definitions/          # <-- ANADIR TOOLS AQUI
 │   │   │       ├── getMapCenter.json
-│   │   │       ├── addWMSLayer.json
+│   │   │       ├── addLayer.json
 │   │   │       └── ...
+│   │   ├── ml/                       # Deteccion de objetos ML
+│   │   │   ├── base.py               # BaseDetector ABC
+│   │   │   ├── registry.py           # Auto-descubre detectores (@detector)
+│   │   │   ├── inference.py          # Pipeline: WMS → detector → GeoJSON
+│   │   │   └── detectors/            # <-- ANADIR DETECTORES AQUI
+│   │   │       └── pool_detector.py  # YOLOv11n para piscinas
 │   │   ├── mcp/                      # Cliente MCP (Model Context Protocol)
 │   │   │   ├── client.py             # Cliente JSON-RPC sobre HTTP
 │   │   │   └── manager.py            # Singleton que gestiona N servidores MCP
@@ -611,6 +696,9 @@ apiidee-agent/
 │   │       └── definitions/          # <-- ANADIR SKILLS AQUI
 │   │           ├── navigation.yaml
 │   │           └── layer_management.yaml
+│   ├── ml_models/                    # Pesos de modelos ML
+│   │   ├── download.py               # Descarga + conversion .pt → ONNX
+│   │   └── pool_detector.onnx        # YOLOv11n (~10 MB, auto-descargado)
 │   └── vectorstore/                  # Gestion de indices
 │       ├── models.py                 # KnowledgeSource
 │       ├── store.py                  # Wrapper FAISS
@@ -634,7 +722,7 @@ apiidee-agent/
 | `GET` | `/api/conversations/{id}/` | Obtener conversacion |
 | `DELETE` | `/api/conversations/{id}/` | Eliminar conversacion |
 | `GET` | `/api/conversations/{id}/messages/` | Listar mensajes |
-| `POST` | `/api/conversations/{id}/chat/` | Enviar mensaje (responde texto o tool_call) |
+| `POST` | `/api/conversations/{id}/chat/` | Enviar mensaje (responde texto, tool_call o SSE si `stream=true`) |
 | `POST` | `/api/conversations/{id}/tool-result/` | Enviar resultado de ejecucion de tool |
 | `POST` | `/api/test-key/` | Probar API key contra un proveedor (`provider` + `api_key`) |
 
@@ -713,6 +801,7 @@ El plugin se integra como cualquier otro plugin de API-IDEE:
     backendUrl: 'http://localhost:8000/api',
     tooltip: 'Asistente API-IDEE',
     placeholder: 'Pregunta sobre API-IDEE...',
+    stream: true,              // Streaming SSE (opcional, por defecto false)
   });
 
   map.addPlugin(chatAgent);
