@@ -132,7 +132,7 @@ def _convert_pt_to_onnx(pt_path: Path, onnx_path: Path, imgsz: int = 640) -> boo
 def download_and_convert(onnx_filename: str, info: dict) -> bool:
     """Descarga un .pt, lo convierte a ONNX y limpia el .pt intermedio."""
     onnx_path = _MODEL_DIR / onnx_filename
-    pt_path = _MODEL_DIR / onnx_path.stem.replace(".", "_temp_") + ".pt"
+    pt_path = _MODEL_DIR / (onnx_path.stem + "_temp.pt")
 
     # 1. Descargar .pt
     if not _download_file(info["pt_url"], pt_path, info["description"]):
