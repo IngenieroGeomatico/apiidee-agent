@@ -180,3 +180,12 @@ MCP_SERVERS_PATH = os.getenv('MCP_SERVERS_PATH') or BASE_DIR / 'mcp_servers.json
 if isinstance(MCP_SERVERS_PATH, str):
     MCP_SERVERS_PATH = Path(MCP_SERVERS_PATH)
 MCP_SERVERS_PATH = MCP_SERVERS_PATH if MCP_SERVERS_PATH.exists() else None
+
+
+# ---------------------------------------------------------------------------
+# Conversations — TTL and limits
+# ---------------------------------------------------------------------------
+
+CONVERSATION_TTL_HOURS = int(os.getenv('CONVERSATION_TTL_HOURS', '24'))
+CONVERSATION_MAX_PER_CLIENT = int(os.getenv('CONVERSATION_MAX_PER_CLIENT', '10'))
+CONVERSATION_CLEANUP_INTERVAL_SECONDS = int(os.getenv('CONVERSATION_CLEANUP_INTERVAL_SECONDS', '3600'))
