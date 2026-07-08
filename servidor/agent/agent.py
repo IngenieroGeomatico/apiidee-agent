@@ -178,7 +178,7 @@ class Agent:
             if server_calls or mcp_calls:
                 # Ejecutar server/MCP tools en línea (sin streamear)
                 for tc in server_calls:
-                    formatted = self._execute_server_tool(tc)
+                    formatted = self._execute_server_tool(tc, layers)
                     self._append_tool_messages(llm_messages, type("R", (), {"content": accumulated_text})(), tc, formatted)
                     self._collect_geojson_layer(formatted, layers)
 
@@ -260,7 +260,7 @@ class Agent:
 
             if server_calls or mcp_calls:
                 for tc in server_calls:
-                    formatted = self._execute_server_tool(tc)
+                    formatted = self._execute_server_tool(tc, layers)
                     self._append_tool_messages(llm_messages, response, tc, formatted)
                     self._collect_geojson_layer(formatted, layers)
 
@@ -303,11 +303,19 @@ class Agent:
         return server_calls, mcp_calls, map_calls
 
     @staticmethod
-    def _execute_server_tool(tc: dict) -> str:
-        """Ejecuta una herramienta del servidor y devuelve el resultado formateado."""
+    def _execute_server_tool(tc: dict, layers: list = None) -> str:
+        """Ejecuta una herramienta del servidor y devuelve el resultado formateado.
+
+        Si el resultado contiene una clave ``_layers``, los elementos se extraen
+        y se añaden a *layers* (modificable in-situ) para que no lleguen al LLM.
+        """
         try:
             executor = get_executor(tc["name"])
             result = executor(**tc["args"])
+            if layers is not None and isinstance(result, dict) and "_layers" in result:
+                extra = result.pop("_layers")
+                if isinstance(extra, list):
+                    layers.extend(extra)
             formatted = (
                 json.dumps({"result": result}, ensure_ascii=False)
                 if not isinstance(result, str) else result
@@ -355,66 +363,67 @@ class Agent:
         """
         try:
             parsed = json.loads(tool_result)
-            if isinstance(parsed, dict) and parsed.get("type") == "FeatureCollection":
-                features = parsed.get("features", [])
+            if isinstance(parsed, dict):
+                if parsed.get("type") == "FeatureCollection":
+                    features = parsed.get("features", [])
 
-                # Agrupar features por label
-                groups: dict[str, list] = {}
-                for f in features:
-                    lbl = f.get("properties", {}).get("label", "")
-                    groups.setdefault(lbl, []).append(f)
+                    # Agrupar features por label
+                    groups: dict[str, list] = {}
+                    for f in features:
+                        lbl = f.get("properties", {}).get("label", "")
+                        groups.setdefault(lbl, []).append(f)
 
-                # Si hay los labels conocidos "bbox"/"contour", separar en dos capas fijas
-                LAYER_NAMES = {"bbox": "AGENT_MRE_Piscinas", "contour": "AGENT_Piscinas"}
-                CONTOUR_STYLE = {
-                    "polygon": {
-                        "fill": {
-                            "color": "#90CAF9",
-                            "opacity": 0.5,
+                    # Si hay los labels conocidos "bbox"/"contour", separar en dos capas fijas
+                    LAYER_NAMES = {"bbox": "AGENT_MRE_Piscinas", "contour": "AGENT_Piscinas"}
+                    CONTOUR_STYLE = {
+                        "polygon": {
+                            "fill": {
+                                "color": "#90CAF9",
+                                "opacity": 0.5,
+                            },
+                            "stroke": {
+                                "color": "#0D47A1",
+                                "width": 3,
+                            },
                         },
-                        "stroke": {
-                            "color": "#0D47A1",
-                            "width": 3,
-                        },
-                    },
-                }
-                if any(lbl in LAYER_NAMES for lbl in groups):
-                    for lbl, group_features in groups.items():
-                        if lbl in LAYER_NAMES and group_features:
-                            layer = {
-                                "type": "geojson",
-                                "source": {
-                                    "type": "FeatureCollection",
-                                    "features": group_features,
-                                },
-                                "name": LAYER_NAMES[lbl],
-                            }
-                            if lbl == "contour":
-                                layer["style"] = CONTOUR_STYLE
-                            layers.append(layer)
-                            logger.info(
-                                "Layer GeoJSON '%s': %d features",
-                                LAYER_NAMES[lbl], len(group_features),
-                            )
+                    }
+                    if any(lbl in LAYER_NAMES for lbl in groups):
+                        for lbl, group_features in groups.items():
+                            if lbl in LAYER_NAMES and group_features:
+                                layer = {
+                                    "type": "geojson",
+                                    "source": {
+                                        "type": "FeatureCollection",
+                                        "features": group_features,
+                                    },
+                                    "name": LAYER_NAMES[lbl],
+                                }
+                                if lbl == "contour":
+                                    layer["style"] = CONTOUR_STYLE
+                                layers.append(layer)
+                                logger.info(
+                                    "Layer GeoJSON '%s': %d features",
+                                    LAYER_NAMES[lbl], len(group_features),
+                                )
+                    else:
+                        # Comportamiento anterior: capa única con el label de la primera feature
+                        label = "Detecciones"
+                        if features and features[0].get("properties", {}).get("label"):
+                            label = features[0]["properties"]["label"] + " detectados"
+                        layers.append({
+                            "type": "geojson",
+                            "source": parsed,
+                            "name": label,
+                        })
+                        logger.info(
+                            "Layer GeoJSON recolectado: %d features, label='%s'",
+                            len(features), label,
+                        )
                 else:
-                    # Comportamiento anterior: capa única con el label de la primera feature
-                    label = "Detecciones"
-                    if features and features[0].get("properties", {}).get("label"):
-                        label = features[0]["properties"]["label"] + " detectados"
-                    layers.append({
-                        "type": "geojson",
-                        "source": parsed,
-                        "name": label,
-                    })
-                    logger.info(
-                        "Layer GeoJSON recolectado: %d features, label='%s'",
-                        len(features), label,
+                    logger.debug(
+                        "Tool result no es FeatureCollection (type=%s)",
+                        parsed.get("type") if isinstance(parsed, dict) else type(parsed).__name__,
                     )
-            else:
-                logger.debug(
-                    "Tool result no es FeatureCollection (type=%s)",
-                    parsed.get("type") if isinstance(parsed, dict) else type(parsed).__name__,
-                )
         except (json.JSONDecodeError, TypeError) as exc:
             logger.debug("Tool result no es JSON válido para layer: %s", exc)
 
