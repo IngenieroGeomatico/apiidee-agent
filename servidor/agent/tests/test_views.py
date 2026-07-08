@@ -387,3 +387,81 @@ class AssistantResponseLayersTests(TestCase):
         self.assertEqual(len(layer_blocks), 2)
         names = {b["layer"]["name"] for b in layer_blocks}
         self.assertEqual(names, {"Piscinas", "Edificios"})
+
+
+class StreamingChatTests(TestCase):
+    """Tests para el endpoint chat con stream=true."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.conversation = Conversation.objects.create(title="Stream test")
+
+    @patch("agent.views._make_agent")
+    def test_stream_true_devuelve_event_stream(self, mock_make_agent):
+        """POST chat/ con stream=true devuelve content-type text/event-stream."""
+        mock_agent = MagicMock()
+        mock_agent.run_stream.return_value = iter([
+            {"type": "text_delta", "text": "Hola"},
+            {"type": "done"},
+        ])
+        mock_make_agent.return_value = mock_agent
+
+        url = f"/api/conversations/{self.conversation.id}/chat/"
+        response = self.client.post(url, {"content": "Test", "stream": True}, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/event-stream", response["Content-Type"])
+
+    @patch("agent.views._make_agent")
+    def test_stream_true_contiene_eventos_sse(self, mock_make_agent):
+        """La respuesta SSE contiene eventos text_delta y done."""
+        mock_agent = MagicMock()
+        mock_agent.run_stream.return_value = iter([
+            {"type": "text_delta", "text": "Hola "},
+            {"type": "text_delta", "text": "mundo"},
+            {"type": "done"},
+        ])
+        mock_make_agent.return_value = mock_agent
+
+        url = f"/api/conversations/{self.conversation.id}/chat/"
+        response = self.client.post(url, {"content": "Test", "stream": True}, format="json")
+
+        content = b"".join(response.streaming_content).decode("utf-8")
+        self.assertIn("event: text_delta", content)
+        self.assertIn('"text": "Hola "', content)
+        self.assertIn("event: done", content)
+
+    @patch("agent.views._make_agent")
+    def test_stream_false_devuelve_json_normal(self, mock_make_agent):
+        """POST chat/ con stream=false devuelve JSON como siempre."""
+        from agent.agent import AgentResponse
+        mock_agent = MagicMock()
+        mock_agent.run.return_value = AgentResponse.text("Respuesta normal")
+        mock_make_agent.return_value = mock_agent
+
+        url = f"/api/conversations/{self.conversation.id}/chat/"
+        response = self.client.post(url, {"content": "Test", "stream": False}, format="json")
+
+        self.assertEqual(response.status_code, 201)
+        self.assertIn("application/json", response["Content-Type"])
+
+    @patch("agent.views._make_agent")
+    def test_stream_persiste_mensaje_asistente(self, mock_make_agent):
+        """El stream persiste el mensaje del asistente al terminar."""
+        mock_agent = MagicMock()
+        mock_agent.run_stream.return_value = iter([
+            {"type": "text_delta", "text": "Texto completo"},
+            {"type": "done"},
+        ])
+        mock_make_agent.return_value = mock_agent
+
+        url = f"/api/conversations/{self.conversation.id}/chat/"
+        response = self.client.post(url, {"content": "Test", "stream": True}, format="json")
+        # Consumir el stream para que se persista
+        b"".join(response.streaming_content)
+
+        # Verificar que se persistieron 2 mensajes (user + assistant)
+        msgs = list(self.conversation.messages.all())
+        self.assertEqual(len(msgs), 2)
+        self.assertEqual(msgs[0].role, "user")
+        self.assertEqual(msgs[1].role, "assistant")
