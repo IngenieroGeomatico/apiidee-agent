@@ -130,6 +130,8 @@ REST_FRAMEWORK = {
 
 _origins = os.getenv('ALLOWED_ORIGINS', 'http://localhost:8080')
 CORS_ALLOWED_ORIGINS = [o.strip() for o in _origins.split(',') if o.strip()]
+# Permitir todas las fuentes en desarrollo (incluye origen 'null' al abrir el index.html directamente)
+CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
 
 
