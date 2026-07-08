@@ -81,17 +81,21 @@ class GeocodePlaceTest(TestCase):
 
         result = geocode_place(q="Madrid")
 
-        self.assertIn("candidates", result)
-        self.assertIn("query", result)
-        self.assertIn("instructions", result)
-        self.assertEqual(result["query"], "Madrid")
-        self.assertEqual(len(result["candidates"]), 2)
+        self.assertIn("_layers", result)
+        self.assertEqual(result["message"], "Se encontraron 2 candidatos para «Madrid».")
+        layers = result["_layers"]
+        self.assertEqual(len(layers), 1)
+        layer = layers[0]
+        self.assertEqual(layer["type"], "geocoding_candidates")
+        self.assertEqual(layer["query"], "Madrid")
+        candidates = layer["candidates"]
+        self.assertEqual(len(candidates), 2)
         # Primer candidato tiene coordenadas
-        self.assertEqual(result["candidates"][0]["address"], "Madrid, Madrid")
-        self.assertIn("geojsonURL", result["candidates"][0])
-        self.assertIn("lat", result["candidates"][0])
+        self.assertEqual(candidates[0]["address"], "Madrid, Madrid")
+        self.assertIn("geojsonURL", candidates[0])
+        self.assertIn("lat", candidates[0])
         # Segundo candidato con lat/lng 0 no incluye coordenadas
-        self.assertNotIn("lat", result["candidates"][1])
+        self.assertNotIn("lat", candidates[1])
 
     @patch("agent.tools.executors._fetch_candidates")
     def test_con_q_sin_candidatos_devuelve_fallback(self, mock_candidates):

@@ -130,15 +130,12 @@ def geocode_place(q: str = "", id: str = "", type: str = "",
     if candidates is not None:
         formatted = [_format_candidate(i, c) for i, c in enumerate(candidates)]
         return {
-            "candidates": formatted,
-            "query": q,
-            "instructions": (
-                "Present the candidates as a numbered list to the user. "
-                "For each candidate show: address, type, municipality. "
-                "Ask the user which one to load on the map. "
-                "When the user chooses, call geocodePlace with the candidate's id and type to get its GeoJSON. "
-                "Do NOT generate HTML. Do NOT call geocodePlace with the original query again."
-            ),
+            "message": f"Se encontraron {len(formatted)} candidatos para «{q}».",
+            "_layers": [{
+                "type": "geocoding_candidates",
+                "candidates": formatted,
+                "query": q,
+            }],
         }
 
     fallback_msg = f"No candidates found for: {q}"

@@ -292,6 +292,34 @@ function chatagentExecuteTool(map, toolName, args) {
     features en lugar de sustituir la capa completa. */
 var CHATAGENT_ACCUMULATED_FEATURES = {};
 
+/** Renderiza candidatos del geocoder en el chat como botones clicables.
+    Cada boton carga el GeoJSON directamente desde su ``geojsonURL``.
+    @param {Array<Object>} candidates Lista de candidatos con geojsonURL.
+    @param {string} query Texto de la busqueda original. */
+function chatagentRenderGeocodingCandidates(candidates, query) {
+  if (!candidates || candidates.length === 0) return '';
+  var html = '<div class="chatagent-candidates">';
+  var currentType = '';
+  for (var i = 0; i < candidates.length; i++) {
+    var c = candidates[i];
+    var ctype = c.type || '';
+    if (ctype !== currentType) {
+      currentType = ctype;
+      html += '<div class="chatagent-candidates-group-title">' + chatagentEscapeHtml(ctype.charAt(0).toUpperCase() + ctype.slice(1)) + '</div>';
+    }
+    var addr = c.address || 'Sin dirección';
+    var name = c.address || c.id || addr;
+    var url = c.geojsonURL || '';
+    html += '<button class="candidate-btn" onclick="chatagentQuickReply('
+         + "'" + chatagentEscapeHtml(addr).replace(/'/g, "\\'") + "', "
+         + "'" + chatagentEscapeHtml(url).replace(/'/g, "\\'") + "', "
+         + "'" + chatagentEscapeHtml(name).replace(/'/g, "\\'") + "'"
+         + ')">' + chatagentEscapeHtml(addr) + '</button>';
+  }
+  html += '</div>';
+  return html;
+}
+
 /** Añade una capa GeoJSON al mapa o, si ya existe una capa con ese nombre,
     añade las nuevas features a la fuente existente (protocolo de append).
     @param {IDEE.Map} map Mapa activo.
@@ -346,16 +374,37 @@ function chatagentAddOrAppendGeoJSON(map, layerName, geojsonSource, styleOpts) {
   map.addLayers([gLayer]);
 }
 
-/** Envia un mensaje de seleccion rapida del usuario al chat.
+/** Envia un mensaje de seleccion rapida del usuario al chat, o carga una capa
+    GeoJSON directamente si se proporciona ``geojsonUrl``.
     Llamado desde botones/links HTML renderizados por el LLM en cualquier contexto
     donde el usuario deba elegir entre opciones (candidatos de geocodificacion,
-    capas, acciones, etc.). La opcion clickeada se envia como mensaje de usuario
-    y se procesa por el flujo normal del chat.
-    @param {string} text Texto del mensaje a enviar (visible en el chat). */
-window.chatagentQuickReply = function(text) {
+    capas, acciones, etc.).
+    @param {string} text Texto visible del mensaje o nombre de capa.
+    @param {string} [geojsonUrl] URL del GeoJSON a cargar (opcional).
+    @param {string} [layerName] Nombre para la capa (opcional, usa text por defecto). */
+window.chatagentQuickReply = function(text, geojsonUrl, layerName) {
   var inst = window.__chatagentPlugin;
   if (!inst || !text) return;
-  inst._sendMessage(text);
+  if (geojsonUrl) {
+    var name = layerName || text;
+    var gLayer = new IDEE.layer.GeoJSON({
+      name: name,
+      legend: name,
+      url: geojsonUrl,
+    });
+    gLayer.on(IDEE.evt.LOAD, function () {
+      try {
+        var extent = gLayer.getFeaturesExtent();
+        if (extent) inst.map_.setBbox({ x: { min: extent[0], max: extent[2] }, y: { min: extent[1], max: extent[3] } });
+      } catch (e) {
+        console.warn('Could not zoom to layer:', e);
+      }
+    });
+    inst.map_.addLayers([gLayer]);
+    inst._appendMessage('system', '✓ Capa cargada: ' + name);
+  } else {
+    inst._sendMessage(text);
+  }
 };
 
 /** Escapa caracteres HTML en una cadena para prevenir XSS.
@@ -381,7 +430,7 @@ function chatagentSanitizeHtml(html) {
     'span', 'div', 'table', 'thead', 'tbody', 'tr', 'td', 'th',
     'details', 'summary', 'hr', 'sup', 'sub', 'mark',
   ];
-  var ALLOWED_ATTRS = ['href', 'title', 'class', 'id', 'target', 'colspan', 'rowspan', 'onclick'];
+  var ALLOWED_ATTRS = ['href', 'title', 'class', 'id', 'target', 'colspan', 'rowspan', 'onclick', 'data-geojson-url', 'data-id'];
 
   var tmp = document.createElement('div');
   tmp.innerHTML = html;
@@ -1157,12 +1206,17 @@ class ChatAgent {
       this.modelSelect.appendChild(opt);
     }, this);
 
-    var defaultModel = provider.default_model;
-    if (defaultModel && provider.models.some(function(m) { return m.id === defaultModel; })) {
-      this.modelSelect.value = defaultModel;
+    var selectedModel = null;
+    try { selectedModel = localStorage.getItem('chatagentModel'); } catch(e) {}
+    if (selectedModel && provider.models.some(function(m) { return m.id === selectedModel; })) {
+      this.modelSelect.value = selectedModel;
+    } else {
+      var defaultModel = provider.default_model;
+      if (defaultModel && provider.models.some(function(m) { return m.id === defaultModel; })) {
+        this.modelSelect.value = defaultModel;
+      }
     }
     this.selectedModel = this.modelSelect.value;
-    // Guardar modelo seleccionado en localStorage
     try { localStorage.setItem('chatagentModel', this.selectedModel); } catch(e) {}
   }
 
@@ -1514,6 +1568,8 @@ class ChatAgent {
               } else if (layerInfo.source) {
                 chatagentAddOrAppendGeoJSON(this.map_, layerInfo.name || 'Capa', layerInfo.source, layerInfo.style);
               }
+            } else if (layerType === 'geocoding_candidates') {
+              this._appendCandidates(layerInfo.candidates);
             }
           } else if (item.type === 'tool_call' && item.toolCalls) {
           if (!handledToolCall) {
@@ -1597,6 +1653,8 @@ class ChatAgent {
               } else if (layerInfo.source) {
                 chatagentAddOrAppendGeoJSON(self.map_, layerInfo.name || 'Capa', layerInfo.source, layerInfo.style);
               }
+            } else if (layerInfo.type === 'geocoding_candidates') {
+              self._appendCandidates(layerInfo.candidates);
             }
           }
           // 'sources' y 'done' se ignoran en el frontend (sources ya se muestran inline)
@@ -1655,6 +1713,8 @@ class ChatAgent {
                 } else if (layerInfo.source) {
                   chatagentAddOrAppendGeoJSON(this.map_, layerInfo.name || 'Capa', layerInfo.source, layerInfo.style);
                 }
+              } else if (layerType === 'geocoding_candidates') {
+                this._appendCandidates(layerInfo.candidates);
               }
             }
           }
@@ -1688,11 +1748,18 @@ class ChatAgent {
     var wrapper = document.createElement('div');
     wrapper.className = 'chatagent-message-wrapper ' + role;
 
-    var safeContent = (role === 'user') ? content : chatagentSanitizeHtml(content);
-
+    var htmlContent = content;
+    if (role !== 'user') {
+      // Extraer HTML de bloques markdown ```html ... ``` si el LLM los envuelve
+      var match = content.match(/```html\s*([\s\S]*?)```/);
+      if (match && match[1].trim()) {
+        htmlContent = match[1];
+      }
+      htmlContent = chatagentSanitizeHtml(htmlContent);
+    }
     var msgDiv = document.createElement('div');
     msgDiv.className = 'chatagent-message';
-    msgDiv.innerHTML = safeContent;
+    msgDiv.innerHTML = htmlContent;
 
     wrapper.appendChild(msgDiv);
     this.messagesContainer.appendChild(wrapper);
@@ -1717,6 +1784,45 @@ class ChatAgent {
     this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
 
     if (returnElement) return msgDiv;
+  }
+
+  /** Inserta candidatos del geocoder como una lista HTML numerada agrupada por tipo
+      dentro del ultimo mensaje del asistente.
+    @param {Array<Object>} candidates Lista de candidatos con geojsonURL. */
+  _appendCandidates(candidates) {
+    if (!candidates || candidates.length === 0 || !this.messagesContainer) return;
+    var html = '<div class="chatagent-candidates">';
+    var currentType = '';
+    var olIndex = 0;
+    for (var ci = 0; ci < candidates.length; ci++) {
+      var c = candidates[ci];
+      var ctype = c.type || '';
+      if (ctype !== currentType) {
+        if (currentType !== '') html += '</ol>';
+        currentType = ctype;
+        var typeLabel = ctype.charAt(0).toUpperCase() + ctype.slice(1);
+        html += '<div class="chatagent-candidates-group-title">' + chatagentEscapeHtml(typeLabel) + '</div><ol class="chatagent-candidates-list">';
+      }
+      olIndex++;
+      var addr = c.address || 'Sin dirección';
+      var u = c.geojsonURL || '';
+      var escAddr = chatagentEscapeHtml(addr).replace(/'/g, "\\'");
+      var escUrl = chatagentEscapeHtml(u).replace(/'/g, "\\'");
+      html += '<li data-geojson-url="' + escUrl + '" onclick="chatagentQuickReply(\'' + escAddr + '\', \'' + escUrl + '\')" class="chatagent-candidate-item">' + chatagentEscapeHtml(addr) + '</li>';
+    }
+    if (currentType !== '') html += '</ol>';
+    html += '</div>';
+
+    var wrappers = this.messagesContainer.querySelectorAll('.chatagent-message-wrapper.assistant');
+    if (wrappers.length > 0) {
+      var lastMsg = wrappers[wrappers.length - 1].querySelector('.chatagent-message');
+      if (lastMsg) {
+        lastMsg.insertAdjacentHTML('beforeend', html);
+        this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+        return;
+      }
+    }
+    this._appendMessage('assistant', html);
   }
 
   /** Muestra u oculta el indicador de carga en el chat.
