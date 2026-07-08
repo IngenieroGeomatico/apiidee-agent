@@ -27,12 +27,12 @@ class AgentConfig(AppConfig):
     def _ensure_ml_models():
         """Auto-descarga modelos ML si faltan (solo una vez)."""
         try:
-            from ml_models.download import ensure_models
+            from ml_models.utils.download import ensure_models
             ensure_models()
         except Exception:
             logger.warning(
                 "No se pudieron verificar modelos ML. "
-                "Ejecuta: python -m ml_models.download",
+                "Ejecuta: python -m ml_models.utils.download",
             )
 
     @staticmethod

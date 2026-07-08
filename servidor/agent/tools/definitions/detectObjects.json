@@ -31,6 +31,14 @@
       "wms_layer": {
         "type": "string",
         "description": "Nombre de la capa WMS. Por defecto 'OI.OrthoimageCoverage' (PNOA)."
+      },
+      "image_width": {
+        "type": "integer",
+        "description": "Ancho de la imagen WMS en píxeles (por defecto 2048). Aumentar para más resolución."
+      },
+      "image_height": {
+        "type": "integer",
+        "description": "Alto de la imagen WMS en píxeles (por defecto 2048). Aumentar para más resolución."
       }
     },
     "required": ["detector", "bbox"]

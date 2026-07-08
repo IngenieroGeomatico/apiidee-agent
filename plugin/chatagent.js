@@ -286,6 +286,66 @@ function chatagentExecuteTool(map, toolName, args) {
   }
 }
 
+/** Acumulador de features GeoJSON por nombre de capa.
+    Clave = nombre de capa (ej: ``AGENT_MRE_Piscinas``), valor = array de features.
+    Se usa para el protocolo de append: si la capa ya existe, se añaden las nuevas
+    features en lugar de sustituir la capa completa. */
+var CHATAGENT_ACCUMULATED_FEATURES = {};
+
+/** Añade una capa GeoJSON al mapa o, si ya existe una capa con ese nombre,
+    añade las nuevas features a la fuente existente (protocolo de append).
+    @param {IDEE.Map} map Mapa activo.
+    @param {string} layerName Nombre fijo de la capa.
+    @param {Object} geojsonSource GeoJSON FeatureCollection a añadir.
+    @param {Object} [styleOpts] Opciones de estilo IDEE.style.Generic (opcional). */
+function chatagentAddOrAppendGeoJSON(map, layerName, geojsonSource, styleOpts) {
+  var newFeatures = (geojsonSource && geojsonSource.features) || [];
+  if (newFeatures.length === 0) return;
+
+  // Inicializar acumulador si es primera vez
+  if (!CHATAGENT_ACCUMULATED_FEATURES[layerName]) {
+    CHATAGENT_ACCUMULATED_FEATURES[layerName] = [];
+  }
+
+  // Acumular IDs para evitar duplicados
+  var existingIds = {};
+  CHATAGENT_ACCUMULATED_FEATURES[layerName].forEach(function(f) {
+    if (f.id !== undefined && f.id !== null) existingIds[f.id] = true;
+  });
+
+  newFeatures.forEach(function(f) {
+    if (f.id !== undefined && f.id !== null && existingIds[f.id]) return;
+    CHATAGENT_ACCUMULATED_FEATURES[layerName].push(f);
+  });
+
+  // Buscar capa existente en el mapa
+  var existingLayer = null;
+  var layers = map.getLayers();
+  for (var i = 0; i < layers.length; i++) {
+    if (layers[i].name === layerName) {
+      existingLayer = layers[i];
+      break;
+    }
+  }
+
+  // Eliminar capa anterior si existe
+  if (existingLayer) {
+    try { map.removeLayers([existingLayer]); } catch (e) { /* ignorar */ }
+  }
+
+  // Crear nueva capa con todas las features acumuladas
+  var mergedSource = {
+    type: 'FeatureCollection',
+    features: CHATAGENT_ACCUMULATED_FEATURES[layerName],
+  };
+  var gOpts = { name: layerName, legend: layerName, source: mergedSource };
+  var gLayer = new IDEE.layer.GeoJSON(gOpts);
+  if (styleOpts) {
+    gLayer.setStyle(new IDEE.style.Generic(styleOpts));
+  }
+  map.addLayers([gLayer]);
+}
+
 /** Envia un mensaje de seleccion rapida del usuario al chat.
     Llamado desde botones/links HTML renderizados por el LLM en cualquier contexto
     donde el usuario deba elegir entre opciones (candidatos de geocodificacion,
@@ -533,10 +593,33 @@ class ChatAgent {
     this._saveConversationIds();
   }
 
+  /** Elimina una conversacion en el backend y del historial local.
+    @param {string} id ID de la conversacion a eliminar.
+    @param {Element} item Elemento DOM del item a eliminar. */
+  async _deleteConversation(id, item) {
+    try {
+      var res = await fetch(this.options.backendUrl + '/conversations/' + id + '/', {
+        method: 'DELETE',
+      });
+      if (!res.ok && res.status !== 404) throw new Error('HTTP ' + res.status);
+      item.remove();
+      this._removeConversationId(id);
+      if (this.historyList && this.historyList.children.length === 0) {
+        this.historyList.innerHTML = '<div class="chatagent-history-empty">No hay conversaciones guardadas</div>';
+      }
+    } catch (error) {
+      console.error('Error deleting conversation:', error);
+      this._appendMessage('system', 'Error al eliminar la conversación. Comprueba que el servidor está en marcha.');
+    }
+  }
+
   /** Alterna la visibilidad del panel de historial. */
   _toggleHistory() {
     if (!this.historyPanel) return;
     var isOpen = this.historyPanel.classList.toggle('open');
+    if (this.historyToggle) {
+      this.historyToggle.classList.toggle('active', isOpen);
+    }
     if (isOpen) {
       // Cerrar panel de ajustes si esta abierto
       if (this.settingsPanel && this.settingsPanel.classList.contains('open')) {
@@ -606,17 +689,33 @@ class ChatAgent {
         var relativeDate = self._getRelativeDate(date);
 
         html += '<div class="chatagent-history-item" data-id="' + conv.id + '">'
-             +  '<div class="chatagent-history-item-title">' + chatagentEscapeHtml(title) + '</div>'
-             +  '<div class="chatagent-history-item-date">' + relativeDate + '</div>'
+             +  '<div class="chatagent-history-item-content">'
+             +    '<div class="chatagent-history-item-title">' + chatagentEscapeHtml(title) + '</div>'
+             +    '<div class="chatagent-history-item-date">' + relativeDate + '</div>'
+             +  '</div>'
+             +  '<button class="chatagent-history-item-del" title="Eliminar conversación">&times;</button>'
              + '</div>';
     });
     this.historyList.innerHTML = html;
 
-    // Añadir listeners a los items
+    // Añadir listeners a los items (click en el contenido para cambiar)
     this.historyList.querySelectorAll('.chatagent-history-item').forEach(function(item) {
-        item.addEventListener('click', function() {
+        var contentEl = item.querySelector('.chatagent-history-item-content');
+        if (contentEl) {
+            contentEl.addEventListener('click', function() {
+                var id = item.getAttribute('data-id');
+                self._switchConversation(id);
+            });
+        }
+    });
+
+    // Añadir listeners a los botones de eliminar
+    this.historyList.querySelectorAll('.chatagent-history-item-del').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var item = btn.closest('.chatagent-history-item');
             var id = item.getAttribute('data-id');
-            self._switchConversation(id);
+            self._deleteConversation(id, item);
         });
     });
   }
@@ -659,6 +758,7 @@ class ChatAgent {
     } finally {
         this._showLoading(false);
         if (this.historyPanel) this.historyPanel.classList.remove('open');
+        if (this.historyToggle) this.historyToggle.classList.remove('active');
     }
   }
 
@@ -670,6 +770,7 @@ class ChatAgent {
         || '<p>Soy el asistente de API-IDEE. Puedo ayudarte con:</p><ul><li>Usar el visor de mapas</li><li>Capas WMS, WMTS, WFS, GeoJSON, KML...</li><li>Desarrollar plugins</li><li>Navegar y buscar en el mapa</li></ul>';
     this._appendMessage('assistant', welcome);
     if (this.historyPanel) this.historyPanel.classList.remove('open');
+    if (this.historyToggle) this.historyToggle.classList.remove('active');
   }
 
   /* ------------------------------------------------------------------
@@ -736,7 +837,10 @@ class ChatAgent {
       +       '</div>'
       +     '</div>'
       +     '<div id="chatagent-history-panel" class="chatagent-history-panel">'
-      +       '<button id="chatagent-new-conversation" class="chatagent-btn-new-conversation">Nueva conversación</button>'
+      +       '<div class="chatagent-history-header">'
+      +         '<span class="chatagent-history-header-title">Historial</span>'
+      +         '<button id="chatagent-new-conversation" class="chatagent-btn-new-conversation">+ Nueva</button>'
+      +       '</div>'
       +       '<div id="chatagent-history-list" class="chatagent-history-list"></div>'
       +     '</div>'
       +     '<div id="chatagent-messages" class="chatagent-messages"></div>'
@@ -1402,12 +1506,14 @@ class ChatAgent {
             var layerInfo = item.layer;
             var layerType = layerInfo.type;
             if (layerType === 'geojson') {
-              var gLayer = new IDEE.layer.GeoJSON({
-                name: layerInfo.name || 'Capa',
-                source: layerInfo.source,
-                url: layerInfo.url,
-              });
-              this.map_.addLayers([gLayer]);
+              if (layerInfo.url) {
+                var gOpts = { name: layerInfo.name || 'Capa', legend: layerInfo.name || 'Capa', url: layerInfo.url };
+                var gLayer = new IDEE.layer.GeoJSON(gOpts);
+                if (layerInfo.style) gLayer.setStyle(new IDEE.style.Generic(layerInfo.style));
+                this.map_.addLayers([gLayer]);
+              } else if (layerInfo.source) {
+                chatagentAddOrAppendGeoJSON(this.map_, layerInfo.name || 'Capa', layerInfo.source, layerInfo.style);
+              }
             }
           } else if (item.type === 'tool_call' && item.toolCalls) {
           if (!handledToolCall) {
@@ -1483,12 +1589,14 @@ class ChatAgent {
           } else if (evType === 'layer' && event.layer) {
             var layerInfo = event.layer;
             if (layerInfo.type === 'geojson') {
-              var gLayer = new IDEE.layer.GeoJSON({
-                name: layerInfo.name || 'Capa',
-                source: layerInfo.source,
-                url: layerInfo.url,
-              });
-              self.map_.addLayers([gLayer]);
+              if (layerInfo.url) {
+                var gOpts = { name: layerInfo.name || 'Capa', legend: layerInfo.name || 'Capa', url: layerInfo.url };
+                var gLayer = new IDEE.layer.GeoJSON(gOpts);
+                if (layerInfo.style) gLayer.setStyle(new IDEE.style.Generic(layerInfo.style));
+                self.map_.addLayers([gLayer]);
+              } else if (layerInfo.source) {
+                chatagentAddOrAppendGeoJSON(self.map_, layerInfo.name || 'Capa', layerInfo.source, layerInfo.style);
+              }
             }
           }
           // 'sources' y 'done' se ignoran en el frontend (sources ya se muestran inline)
@@ -1535,12 +1643,19 @@ class ChatAgent {
                 await this._handleToolCalls(it.toolCalls);
                 handledToolCall = true;
               }
-            } else if (it.type === 'geojson') {
-              var gLayer = new IDEE.layer.GeoJSON({
-                name: it.name || 'Detecciones',
-                source: it.geojson,
-              });
-              this.map_.addLayers([gLayer]);
+            } else if (it.type === 'layer') {
+              var layerInfo = it.layer;
+              var layerType = layerInfo.type;
+              if (layerType === 'geojson') {
+                if (layerInfo.url) {
+                  var gOpts = { name: layerInfo.name || 'Capa', legend: layerInfo.name || 'Capa', url: layerInfo.url };
+                  var gLayer = new IDEE.layer.GeoJSON(gOpts);
+                  if (layerInfo.style) gLayer.setStyle(new IDEE.style.Generic(layerInfo.style));
+                  this.map_.addLayers([gLayer]);
+                } else if (layerInfo.source) {
+                  chatagentAddOrAppendGeoJSON(this.map_, layerInfo.name || 'Capa', layerInfo.source, layerInfo.style);
+                }
+              }
             }
           }
         }
