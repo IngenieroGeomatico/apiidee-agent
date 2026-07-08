@@ -388,6 +388,7 @@ class ChatAgent {
     this.options.tooltip = this.options.tooltip || 'Asistente API-IDEE';
     this.options.placeholder = this.options.placeholder || 'Pregunta sobre API-IDEE...';
     this.options.welcomeMessage = this.options.welcomeMessage || null;
+    this.options.stream = this.options.stream !== undefined ? this.options.stream : false;
 
     // Estado
     this.map_ = null;
@@ -1096,6 +1097,7 @@ class ChatAgent {
   }
 
   /** Envia un mensaje del usuario al backend y procesa la respuesta (texto o tool_calls).
+      Si ``this.options.stream`` es true, usa SSE para recibir la respuesta incrementalmente.
       @param {string} [content] Contenido opcional. Si no se pasa, se lee del input. */
   async _sendMessage(content) {
     if (!this.inputElement) return;
@@ -1117,44 +1119,10 @@ class ChatAgent {
     this._showLoading(true);
 
     try {
-      var mapState = this._getMapState();
-      var body = this._buildRequestBody({ content: content, map_state: mapState });
-
-      var res = await fetch(
-        this.options.backendUrl + '/conversations/' + this.conversationId + '/chat/',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        }
-      );
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      var data = await res.json();
-
-      var handledToolCall = false;
-      if (data.content) {
-        for (var r = 0; r < data.content.length; r++) {
-          var item = data.content[r];
-            if (item.type === 'layer') {
-              var layerInfo = item.layer;
-              var layerType = layerInfo.type;
-              if (layerType === 'geojson') {
-                var gLayer = new IDEE.layer.GeoJSON({
-                  name: layerInfo.name || 'Capa',
-                  source: layerInfo.source,
-                  url: layerInfo.url,
-                });
-                this.map_.addLayers([gLayer]);
-              }
-            } else if (item.type === 'tool_call' && item.toolCalls) {
-            if (!handledToolCall) {
-              await this._handleToolCalls(item.toolCalls);
-              handledToolCall = true;
-            }
-          } else if (item.type === 'text') {
-            this._appendMessage('assistant', item.text, data.metadata ? data.metadata.sources : null);
-          }
-        }
+      if (this.options.stream) {
+        await this._sendMessageStream(content);
+      } else {
+        await this._sendMessageClassic(content);
       }
     } catch (error) {
       console.error('Error sending message:', error);
@@ -1163,6 +1131,127 @@ class ChatAgent {
       this._showLoading(false);
       if (this.messagesContainer) {
         this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+      }
+    }
+  }
+
+  /** Envia un mensaje sin streaming (respuesta JSON completa).
+      @param {string} content Texto del mensaje. */
+  async _sendMessageClassic(content) {
+    var mapState = this._getMapState();
+    var body = this._buildRequestBody({ content: content, map_state: mapState });
+
+    var res = await fetch(
+      this.options.backendUrl + '/conversations/' + this.conversationId + '/chat/',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }
+    );
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    var data = await res.json();
+
+    var handledToolCall = false;
+    if (data.content) {
+      for (var r = 0; r < data.content.length; r++) {
+        var item = data.content[r];
+          if (item.type === 'layer') {
+            var layerInfo = item.layer;
+            var layerType = layerInfo.type;
+            if (layerType === 'geojson') {
+              var gLayer = new IDEE.layer.GeoJSON({
+                name: layerInfo.name || 'Capa',
+                source: layerInfo.source,
+                url: layerInfo.url,
+              });
+              this.map_.addLayers([gLayer]);
+            }
+          } else if (item.type === 'tool_call' && item.toolCalls) {
+          if (!handledToolCall) {
+            await this._handleToolCalls(item.toolCalls);
+            handledToolCall = true;
+          }
+        } else if (item.type === 'text') {
+          this._appendMessage('assistant', item.text, data.metadata ? data.metadata.sources : null);
+        }
+      }
+    }
+  }
+
+  /** Envia un mensaje con streaming SSE. El texto se muestra token a token.
+      @param {string} content Texto del mensaje. */
+  async _sendMessageStream(content) {
+    var mapState = this._getMapState();
+    var body = this._buildRequestBody({ content: content, map_state: mapState, stream: true });
+
+    var res = await fetch(
+      this.options.backendUrl + '/conversations/' + this.conversationId + '/chat/',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }
+    );
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+
+    // Crear burbuja de mensaje vacia para ir rellenando
+    var msgBubble = this._appendMessage('assistant', '', null, true);
+    var accumulatedText = '';
+    var self = this;
+
+    var reader = res.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer = '';
+
+    while (true) {
+      var readResult = await reader.read();
+      if (readResult.done) break;
+
+      buffer += decoder.decode(readResult.value, { stream: true });
+
+      // Parsear eventos SSE del buffer
+      var lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // Ultimo trozo incompleto queda en buffer
+
+      var currentEventType = '';
+      for (var li = 0; li < lines.length; li++) {
+        var line = lines[li];
+        if (line.startsWith('event: ')) {
+          currentEventType = line.substring(7).trim();
+        } else if (line.startsWith('data: ')) {
+          var jsonStr = line.substring(6);
+          try {
+            var event = JSON.parse(jsonStr);
+          } catch (e) {
+            continue;
+          }
+          var evType = currentEventType || event.type || '';
+
+          if (evType === 'text_delta') {
+            accumulatedText += event.text || '';
+            if (msgBubble) {
+              msgBubble.innerHTML = chatagentSanitizeHtml(accumulatedText);
+            }
+            if (self.messagesContainer) {
+              self.messagesContainer.scrollTop = self.messagesContainer.scrollHeight;
+            }
+          } else if (evType === 'tool_call' && event.toolCalls) {
+            await self._handleToolCalls(event.toolCalls);
+          } else if (evType === 'layer' && event.layer) {
+            var layerInfo = event.layer;
+            if (layerInfo.type === 'geojson') {
+              var gLayer = new IDEE.layer.GeoJSON({
+                name: layerInfo.name || 'Capa',
+                source: layerInfo.source,
+                url: layerInfo.url,
+              });
+              self.map_.addLayers([gLayer]);
+            }
+          }
+          // 'sources' y 'done' se ignoran en el frontend (sources ya se muestran inline)
+          currentEventType = '';
+        }
       }
     }
   }
@@ -1230,7 +1319,13 @@ class ChatAgent {
     @param {string} role Rol del mensaje (user, assistant, system).
     @param {string} content Contenido HTML del mensaje.
     @param {Array} [sources] Fuentes citadas opcionales. */
-  _appendMessage(role, content, sources) {
+  /** Añade un mensaje al chat y opcionalmente devuelve el elemento DOM del contenido.
+      @param {string} role Rol del mensaje (user, assistant, system).
+      @param {string} content Contenido HTML del mensaje.
+      @param {Array|null} [sources] Fuentes RAG citadas.
+      @param {boolean} [returnElement] Si true, devuelve el div del mensaje para actualizarlo (streaming).
+      @returns {HTMLElement|undefined} El div del mensaje si returnElement es true. */
+  _appendMessage(role, content, sources, returnElement) {
     if (!this.messagesContainer) return;
 
     var wrapper = document.createElement('div');
@@ -1263,6 +1358,8 @@ class ChatAgent {
     }
 
     this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+
+    if (returnElement) return msgDiv;
   }
 
   /** Muestra u oculta el indicador de carga en el chat.

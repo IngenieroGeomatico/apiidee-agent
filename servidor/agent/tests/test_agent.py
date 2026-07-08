@@ -298,3 +298,83 @@ class AgentInitTest(TestCase):
         self.assertIsNotNone(agent.provider)
         self.assertIsNotNone(agent.skill_registry)
         self.assertIsNone(agent.mcp_manager)
+
+
+class ProviderStreamTest(TestCase):
+    """Verifica BaseLLMProvider.stream() con mock del LLM."""
+
+    def _make_provider(self):
+        from agent.llm.providers import BaseLLMProvider
+        provider = BaseLLMProvider()
+        provider.llm = MagicMock()
+        return provider
+
+    def test_stream_texto_simple(self):
+        """stream() yield chunks de texto incremental."""
+        from agent.llm.providers import BaseLLMProvider
+
+        provider = self._make_provider()
+        chunk1 = MagicMock(content="Hola ", tool_call_chunks=[])
+        chunk2 = MagicMock(content="mundo", tool_call_chunks=[])
+        provider.llm.stream.return_value = [chunk1, chunk2]
+
+        chunks = list(provider.stream([{"role": "user", "content": "Hi"}]))
+        texts = [c.content for c in chunks]
+        self.assertEqual(texts, ["Hola ", "mundo"])
+        self.assertFalse(any(c.has_tool_calls for c in chunks))
+
+    def test_stream_con_tool_calls(self):
+        """stream() acumula tool_calls y los emite al final."""
+        from agent.llm.providers import BaseLLMProvider
+
+        provider = self._make_provider()
+        chunk1 = MagicMock(content="", tool_call_chunks=[
+            {"index": 0, "name": "zoomTo", "id": "tc1", "args": '{"lat":'}
+        ])
+        chunk2 = MagicMock(content="", tool_call_chunks=[
+            {"index": 0, "name": "", "id": "", "args": ' 40.4}'}
+        ])
+        # Simulate hasattr for tool_call_chunks
+        provider.llm.stream.return_value = [chunk1, chunk2]
+
+        chunks = list(provider.stream([{"role": "user", "content": "zoom"}]))
+        tool_chunks = [c for c in chunks if c.has_tool_calls]
+        self.assertEqual(len(tool_chunks), 1)
+        self.assertEqual(tool_chunks[0].tool_calls[0]["name"], "zoomTo")
+        self.assertEqual(tool_chunks[0].tool_calls[0]["args"]["lat"], 40.4)
+
+
+class RunStreamTest(TestCase):
+    """Verifica Agent.run_stream() emite eventos SSE correctos."""
+
+    def _make_agent(self):
+        with patch("agent.agent.SkillRegistry") as MockRegistry, \
+             patch("agent.agent.get_llm_provider") as mock_llm, \
+             patch("agent.agent.Agent._init_mcp") as mock_mcp, \
+             patch("agent.agent.retrieve_context") as mock_rag:
+            mock_mcp.return_value = None
+            MockRegistry.return_value = MagicMock()
+            mock_llm.return_value = MagicMock()
+            mock_rag.return_value = []
+            agent = Agent()
+        return agent
+
+    @patch("agent.agent.retrieve_context", return_value=[])
+    @patch("agent.agent.get_langchain_tools", return_value=[])
+    def test_stream_texto_emite_deltas_y_done(self, _tools, _rag):
+        """run_stream() emite text_delta para cada chunk y done al final."""
+        from agent.llm.providers import ChatResponse
+
+        agent = self._make_agent()
+        agent.provider.stream = MagicMock(return_value=iter([
+            ChatResponse(content="Hola "),
+            ChatResponse(content="mundo"),
+        ]))
+
+        events = list(agent.run_stream("test", []))
+        types = [e["type"] for e in events]
+        self.assertIn("text_delta", types)
+        self.assertEqual(types[-1], "done")
+        text_events = [e for e in events if e["type"] == "text_delta"]
+        full_text = "".join(e["text"] for e in text_events)
+        self.assertEqual(full_text, "Hola mundo")
