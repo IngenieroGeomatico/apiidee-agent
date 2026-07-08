@@ -5,9 +5,11 @@ Cubre los endpoints REST del ConversationViewSet (CRUD + messages),
 las funciones auxiliares ``_build_history`` y ``_make_agent``, y
 verifica que no se realizan llamadas reales al LLM.
 """
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -465,3 +467,93 @@ class StreamingChatTests(TestCase):
         self.assertEqual(len(msgs), 2)
         self.assertEqual(msgs[0].role, "user")
         self.assertEqual(msgs[1].role, "assistant")
+
+
+class ConversationByIdsTests(TestCase):
+    """Tests para el endpoint POST conversations/by-ids/."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.conv1 = Conversation.objects.create(title="Conv 1")
+        self.conv2 = Conversation.objects.create(title="Conv 2")
+        self.conv3 = Conversation.objects.create(title="Conv 3")
+
+    def test_devuelve_solo_ids_pedidos(self):
+        """Solo devuelve las conversaciones cuyos IDs se pasan."""
+        url = "/api/conversations/by-ids/"
+        response = self.client.post(
+            url, {"ids": [str(self.conv1.id), str(self.conv3.id)]}, format="json"
+        )
+        self.assertEqual(response.status_code, 200)
+        ids_devueltos = {c["id"] for c in response.data}
+        self.assertEqual(ids_devueltos, {str(self.conv1.id), str(self.conv3.id)})
+
+    def test_ids_vacios_devuelve_lista_vacia(self):
+        """Con lista vacía de IDs devuelve lista vacía."""
+        response = self.client.post("/api/conversations/by-ids/", {"ids": []}, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, [])
+
+    def test_sin_campo_ids_devuelve_lista_vacia(self):
+        """Sin campo 'ids' devuelve lista vacía."""
+        response = self.client.post("/api/conversations/by-ids/", {}, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, [])
+
+    def test_id_inexistente_se_ignora(self):
+        """IDs que no existen se ignoran sin error."""
+        response = self.client.post(
+            "/api/conversations/by-ids/",
+            {"ids": [str(self.conv1.id), "00000000-0000-0000-0000-000000000000"]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["id"], str(self.conv1.id))
+
+
+class ConversationConfigTests(TestCase):
+    """Tests para el endpoint GET conversation-config/."""
+
+    def test_devuelve_ttl_y_max(self):
+        """Devuelve ttl_hours y max_per_client."""
+        client = APIClient()
+        response = client.get("/api/conversation-config/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("ttl_hours", response.data)
+        self.assertIn("max_per_client", response.data)
+        self.assertIsInstance(response.data["ttl_hours"], int)
+        self.assertIsInstance(response.data["max_per_client"], int)
+
+
+class LazyCleanupTests(TestCase):
+    """Tests para la limpieza lazy de conversaciones expiradas."""
+
+    def test_conversaciones_expiradas_se_borran(self):
+        """Conversaciones con updated_at anterior al TTL se eliminan."""
+        from agent.views import _lazy_cleanup, _last_cleanup_time
+        import agent.views as views_module
+
+        # Crear conversación expirada (forzar updated_at antiguo)
+        conv = Conversation.objects.create(title="Expirada")
+        Conversation.objects.filter(id=conv.id).update(
+            updated_at=timezone.now() - timedelta(hours=999)
+        )
+
+        # Forzar que la limpieza se ejecute
+        views_module._last_cleanup_time = 0.0
+        _lazy_cleanup()
+
+        self.assertFalse(Conversation.objects.filter(id=conv.id).exists())
+
+    def test_conversaciones_recientes_no_se_borran(self):
+        """Conversaciones recientes no se eliminan."""
+        from agent.views import _lazy_cleanup
+        import agent.views as views_module
+
+        conv = Conversation.objects.create(title="Reciente")
+
+        views_module._last_cleanup_time = 0.0
+        _lazy_cleanup()
+
+        self.assertTrue(Conversation.objects.filter(id=conv.id).exists())
