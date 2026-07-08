@@ -16,6 +16,23 @@ from agent.utils.html_parser import TextExtractor
 
 logger = logging.getLogger(__name__)
 
+# ------------------------------------------------------------
+# Variables y funciones auxiliares para detección de objetos
+# ------------------------------------------------------------
+_pending_detection_geojson = None
+
+def pop_pending_detection_geojson():
+    """Devuelve el GeoJSON de la detección más reciente y lo borra.
+
+    La capa se envía al cliente mediante un bloque `layer` en la respuesta del
+    asistente. Este mecanismo evita que la capa quede acumulada entre
+    diferentes peticiones.
+    """
+    global _pending_detection_geojson
+    data = _pending_detection_geojson
+    _pending_detection_geojson = None
+    return data
+
 _executors: Dict[str, Callable] = {}
 
 
@@ -298,13 +315,25 @@ def list_detectors_tool(**kwargs) -> str:
 def detect_objects_tool(detector: str, bbox: dict, srs: str = "EPSG:3857",
                         wms_url: str = None, wms_layer: str = None,
                         **kwargs) -> str:
-    """Ejecuta un detector ML sobre la zona indicada y devuelve GeoJSON."""
+    """Ejecuta un detector ML sobre la zona indicada y devuelve GeoJSON.
+
+    Además, almacena el GeoJSON resultante en una variable global para que la
+    vista pueda añadirlo como capa automáticamente.
+    """
     from agent.ml.inference import run_detection
 
-    return run_detection(
+    result = run_detection(
         detector_name=detector,
         bbox=bbox,
         srs=srs,
         wms_url=wms_url,
         wms_layer=wms_layer,
     )
+    # Guardar el GeoJSON para que la vista lo incluya como capa
+    global _pending_detection_geojson
+    try:
+        _pending_detection_geojson = json.loads(result)
+    except Exception:
+        _pending_detection_geojson = None
+    # Devolver la cadena JSON (el LLM la mostrará al usuario)
+    return result
