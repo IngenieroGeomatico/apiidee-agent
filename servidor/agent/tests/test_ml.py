@@ -245,37 +245,54 @@ class RunDetectionTest(TestCase):
 # ─────────────────────────── Tests PoolDetector ───────────────────────────
 
 class PoolDetectorDemoTest(TestCase):
-    """Tests para el detector de piscinas en modo demo."""
+    """Tests para el detector de piscinas en modo fallback (sin modelo ONNX).
 
-    def test_demo_genera_feature_collection(self):
-        """En modo demo (sin modelo), genera un FeatureCollection con detecciones ficticias."""
+    Se mockea ``_load_model`` para forzar ``model=None`` y que el
+    detector use el fallback de segmentación por color (OpenCV).
+    Se pasa una imagen sintética en vez de ``None``.
+    """
+
+    @staticmethod
+    def _make_blue_image():
+        """Crea una imagen PIL 100x100 con un cuadrado azul (simula piscina)."""
+        from PIL import Image
+        import numpy as np
+        img = np.full((100, 100, 3), 200, dtype=np.uint8)  # fondo gris
+        img[30:70, 30:70] = [0, 120, 200]  # cuadrado azulado
+        return Image.fromarray(img)
+
+    @patch("agent.ml.detectors.pool_detector.PoolDetector._load_model", return_value=None)
+    def test_fallback_genera_feature_collection(self, _mock_model):
+        """Sin modelo ONNX, usa OpenCV y genera un FeatureCollection."""
         from agent.ml.detectors.pool_detector import PoolDetector
 
         det = PoolDetector()
         bbox = {"minX": -400000, "minY": 4800000, "maxX": -390000, "maxY": 4810000}
-        result = det.detect(image=None, bbox=bbox)
+        result = det.detect(image=self._make_blue_image(), bbox=bbox)
 
         self.assertEqual(result["type"], "FeatureCollection")
-        self.assertEqual(len(result["features"]), 3)
+        self.assertIsInstance(result["features"], list)
 
-    def test_demo_features_tienen_geometria_polygon(self):
-        """Las detecciones demo son polígonos."""
+    @patch("agent.ml.detectors.pool_detector.PoolDetector._load_model", return_value=None)
+    def test_fallback_features_tienen_geometria_polygon(self, _mock_model):
+        """Las detecciones por color son polígonos."""
         from agent.ml.detectors.pool_detector import PoolDetector
 
         det = PoolDetector()
         bbox = {"minX": 0, "minY": 0, "maxX": 100, "maxY": 100}
-        result = det.detect(image=None, bbox=bbox)
+        result = det.detect(image=self._make_blue_image(), bbox=bbox)
 
         for feature in result["features"]:
             self.assertEqual(feature["geometry"]["type"], "Polygon")
 
-    def test_demo_properties_incluyen_confidence(self):
-        """Las detecciones demo incluyen confidence entre 0 y 1."""
+    @patch("agent.ml.detectors.pool_detector.PoolDetector._load_model", return_value=None)
+    def test_fallback_properties_incluyen_confidence(self, _mock_model):
+        """Las detecciones por color incluyen confidence entre 0 y 1."""
         from agent.ml.detectors.pool_detector import PoolDetector
 
         det = PoolDetector()
         bbox = {"minX": 0, "minY": 0, "maxX": 100, "maxY": 100}
-        result = det.detect(image=None, bbox=bbox)
+        result = det.detect(image=self._make_blue_image(), bbox=bbox)
 
         for feature in result["features"]:
             conf = feature["properties"]["confidence"]

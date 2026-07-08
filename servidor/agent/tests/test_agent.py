@@ -127,6 +127,160 @@ class FormatMcpResultTest(TestCase):
         self.assertEqual(parsed["data"], 42)
 
 
+class AgentResponseLayersTest(TestCase):
+    """Verifica que AgentResponse propaga layers correctamente."""
+
+    def test_text_con_layers(self):
+        """AgentResponse.text() acepta y almacena layers."""
+        layers = [{"type": "geojson", "source": {}, "name": "Detecciones"}]
+        resp = AgentResponse.text("Ok", layers=layers)
+        self.assertEqual(resp.layers, layers)
+
+    def test_text_sin_layers(self):
+        """AgentResponse.text() sin layers usa lista vacía."""
+        resp = AgentResponse.text("Ok")
+        self.assertEqual(resp.layers, [])
+
+    def test_tool_call_con_layers(self):
+        """AgentResponse.tool_call() acepta y almacena layers."""
+        layers = [{"type": "geojson", "source": {}, "name": "Piscinas"}]
+        tc = [{"name": "zoomTo", "args": {}, "id": "tc1"}]
+        resp = AgentResponse.tool_call("Moviendo...", tool_calls=tc, layers=layers)
+        self.assertEqual(resp.layers, layers)
+
+    def test_init_con_layers(self):
+        """AgentResponse constructor acepta layers directamente."""
+        layers = [{"type": "geojson", "source": {"type": "FeatureCollection"}, "name": "Test"}]
+        resp = AgentResponse(content=[], layers=layers)
+        self.assertEqual(resp.layers, layers)
+
+
+class ClassifyToolCallsTest(TestCase):
+    """Verifica Agent._classify_tool_calls() separa server, MCP y map."""
+
+    def _make_agent(self):
+        with patch("agent.agent.SkillRegistry") as MockRegistry, \
+             patch("agent.agent.get_llm_provider") as mock_llm, \
+             patch("agent.agent.Agent._init_mcp") as mock_mcp:
+            mock_mcp.return_value = MagicMock()
+            mock_mcp.return_value.is_mcp_tool.side_effect = lambda n: n == "mcp_tool"
+            MockRegistry.return_value = MagicMock()
+            mock_llm.return_value = MagicMock()
+            agent = Agent()
+        return agent
+
+    @patch("agent.agent.has_executor", side_effect=lambda n: n == "fetchWebPage")
+    def test_clasifica_server_mcp_y_map(self, _mock_exec):
+        """Clasifica correctamente tools de servidor, MCP y mapa."""
+        agent = self._make_agent()
+        tool_calls = [
+            {"name": "fetchWebPage", "args": {}, "id": "1"},
+            {"name": "mcp_tool", "args": {}, "id": "2"},
+            {"name": "zoomTo", "args": {}, "id": "3"},
+        ]
+        server, mcp, map_calls = agent._classify_tool_calls(tool_calls)
+        self.assertEqual(len(server), 1)
+        self.assertEqual(server[0]["name"], "fetchWebPage")
+        self.assertEqual(len(mcp), 1)
+        self.assertEqual(mcp[0]["name"], "mcp_tool")
+        self.assertEqual(len(map_calls), 1)
+        self.assertEqual(map_calls[0]["name"], "zoomTo")
+
+    @patch("agent.agent.has_executor", return_value=False)
+    def test_sin_executor_ni_mcp_son_map(self, _mock_exec):
+        """Tools sin executor ni MCP se clasifican como map."""
+        agent = self._make_agent()
+        agent.mcp_manager.is_mcp_tool.return_value = False
+        tool_calls = [{"name": "addLayer", "args": {}, "id": "1"}]
+        server, mcp, map_calls = agent._classify_tool_calls(tool_calls)
+        self.assertEqual(len(server), 0)
+        self.assertEqual(len(mcp), 0)
+        self.assertEqual(len(map_calls), 1)
+
+
+class ExecuteServerToolTest(TestCase):
+    """Verifica Agent._execute_server_tool()."""
+
+    @patch("agent.agent.get_executor")
+    def test_ejecuta_tool_correctamente(self, mock_get_exec):
+        """Ejecuta el executor y devuelve resultado formateado."""
+        mock_get_exec.return_value = lambda **kw: {"status": "ok"}
+        tc = {"name": "fetchWebPage", "args": {"url": "http://test.com"}, "id": "1"}
+        result = Agent._execute_server_tool(tc)
+        parsed = json.loads(result)
+        self.assertEqual(parsed["result"]["status"], "ok")
+
+    @patch("agent.agent.get_executor")
+    def test_resultado_string_se_devuelve_directo(self, mock_get_exec):
+        """Si el executor devuelve string, se devuelve directamente (sin wrappear en JSON)."""
+        mock_get_exec.return_value = lambda **kw: "texto plano"
+        tc = {"name": "fetchWebPage", "args": {}, "id": "1"}
+        result = Agent._execute_server_tool(tc)
+        self.assertEqual(result, "texto plano")
+
+    @patch("agent.agent.get_executor", side_effect=Exception("boom"))
+    def test_error_devuelve_json_con_error(self, _mock):
+        """Si el executor falla, devuelve JSON con el error."""
+        tc = {"name": "badTool", "args": {}, "id": "1"}
+        result = Agent._execute_server_tool(tc)
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+        self.assertIn("boom", parsed["error"])
+
+
+class CollectGeojsonLayerTest(TestCase):
+    """Verifica Agent._collect_geojson_layer()."""
+
+    def test_featurecollection_se_acumula(self):
+        """Un FeatureCollection válido se añade a la lista de layers."""
+        geojson = {
+            "type": "FeatureCollection",
+            "features": [{"properties": {"label": "Piscina"}}],
+        }
+        layers = []
+        Agent._collect_geojson_layer(json.dumps(geojson), layers)
+        self.assertEqual(len(layers), 1)
+        self.assertEqual(layers[0]["name"], "Piscina detectados")
+        self.assertEqual(layers[0]["type"], "geojson")
+
+    def test_json_no_featurecollection_se_ignora(self):
+        """Un JSON que no es FeatureCollection no se acumula."""
+        layers = []
+        Agent._collect_geojson_layer(json.dumps({"status": "ok"}), layers)
+        self.assertEqual(len(layers), 0)
+
+    def test_string_no_json_se_ignora(self):
+        """Un string que no es JSON válido no se acumula."""
+        layers = []
+        Agent._collect_geojson_layer("texto plano", layers)
+        self.assertEqual(len(layers), 0)
+
+    def test_featurecollection_sin_label_usa_default(self):
+        """FeatureCollection sin label en features usa 'Detecciones'."""
+        geojson = {"type": "FeatureCollection", "features": [{"properties": {}}]}
+        layers = []
+        Agent._collect_geojson_layer(json.dumps(geojson), layers)
+        self.assertEqual(layers[0]["name"], "Detecciones")
+
+
+class AppendToolMessagesTest(TestCase):
+    """Verifica Agent._append_tool_messages()."""
+
+    def test_append_dos_mensajes(self):
+        """Añade un mensaje assistant y uno tool al historial."""
+        messages = []
+        response = MagicMock()
+        response.content = "Ejecutando..."
+        tc = {"name": "zoomTo", "args": {}, "id": "tc1"}
+        Agent._append_tool_messages(messages, response, tc, '{"ok": true}')
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(messages[0]["role"], "assistant")
+        self.assertEqual(messages[0]["tool_calls"], [tc])
+        self.assertEqual(messages[1]["role"], "tool")
+        self.assertEqual(messages[1]["tool_call_id"], "tc1")
+        self.assertEqual(messages[1]["content"], '{"ok": true}')
+
+
 class AgentInitTest(TestCase):
     """Verifica que Agent.__init__ se puede crear con dependencias mockeadas."""
 
