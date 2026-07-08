@@ -16,23 +16,6 @@ from agent.utils.html_parser import TextExtractor
 
 logger = logging.getLogger(__name__)
 
-# ------------------------------------------------------------
-# Variables y funciones auxiliares para detección de objetos
-# ------------------------------------------------------------
-_pending_detection_geojson = None
-
-def pop_pending_detection_geojson():
-    """Devuelve el GeoJSON de la detección más reciente y lo borra.
-
-    La capa se envía al cliente mediante un bloque `layer` en la respuesta del
-    asistente. Este mecanismo evita que la capa quede acumulada entre
-    diferentes peticiones.
-    """
-    global _pending_detection_geojson
-    data = _pending_detection_geojson
-    _pending_detection_geojson = None
-    return data
-
 _executors: Dict[str, Callable] = {}
 
 
@@ -314,26 +297,36 @@ def list_detectors_tool(**kwargs) -> str:
 @register("detectObjects")
 def detect_objects_tool(detector: str, bbox: dict, srs: str = "EPSG:3857",
                         wms_url: str = None, wms_layer: str = None,
+                        image_width: int = None, image_height: int = None,
                         **kwargs) -> str:
     """Ejecuta un detector ML sobre la zona indicada y devuelve GeoJSON.
 
-    Además, almacena el GeoJSON resultante en una variable global para que la
-    vista pueda añadirlo como capa automáticamente.
+    El resultado GeoJSON se propaga automáticamente como capa ``layer`` en la
+    respuesta del asistente a través del mecanismo ``AgentResponse.layers``.
+
+    Args:
+        detector: Nombre del detector a usar (ver listDetectors).
+        bbox: Extensión geográfica ``{minX, minY, maxX, maxY}``.
+        srs: SRS del bbox (por defecto EPSG:3857).
+        wms_url: URL del WMS (por defecto ortofoto PNOA).
+        wms_layer: Capa del WMS.
+        image_width: Ancho de imagen WMS en píxeles (por defecto 2048).
+        image_height: Alto de imagen WMS en píxeles (por defecto 2048).
     """
     from agent.ml.inference import run_detection
 
-    result = run_detection(
+    # Solo pasar image_width/image_height si el LLM los especificó explícitamente
+    det_kwargs = dict(
         detector_name=detector,
         bbox=bbox,
         srs=srs,
         wms_url=wms_url,
         wms_layer=wms_layer,
     )
-    # Guardar el GeoJSON para que la vista lo incluya como capa
-    global _pending_detection_geojson
-    try:
-        _pending_detection_geojson = json.loads(result)
-    except Exception:
-        _pending_detection_geojson = None
-    # Devolver la cadena JSON (el LLM la mostrará al usuario)
+    if image_width is not None:
+        det_kwargs["image_width"] = image_width
+    if image_height is not None:
+        det_kwargs["image_height"] = image_height
+
+    result = run_detection(**det_kwargs)
     return result

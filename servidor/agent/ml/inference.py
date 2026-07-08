@@ -26,8 +26,8 @@ _DEFAULT_WMS_URL = "https://www.ign.es/wms-inspire/pnoa-ma"
 _DEFAULT_WMS_LAYER = "OI.OrthoimageCoverage"
 
 # Tamaño de imagen a solicitar al WMS (píxeles)
-_DEFAULT_IMAGE_WIDTH = 1024
-_DEFAULT_IMAGE_HEIGHT = 1024
+_DEFAULT_IMAGE_WIDTH = 2048
+_DEFAULT_IMAGE_HEIGHT = 2048
 
 
 def fetch_wms_image(

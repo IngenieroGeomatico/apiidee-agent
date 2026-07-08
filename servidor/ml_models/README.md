@@ -14,14 +14,14 @@ usando segmentación por color con OpenCV.
 
 ### Descarga automática
 
-Al arrancar el servidor, `download.py` comprueba si `pool_detector.onnx` existe.
+Al arrancar el servidor, `utils/download.py` comprueba si `pool_detector.onnx` existe.
 Si no, descarga el `.pt` original (~5 MB), lo convierte a ONNX con `ultralytics`
 (se instala automáticamente si no está) y borra el `.pt` intermedio.
 
 ```bash
 # Descarga manual
 cd servidor
-python -m ml_models.download
+python -m ml_models.utils.download
 ```
 
 ---

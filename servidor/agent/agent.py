@@ -346,21 +346,77 @@ class Agent:
 
     @staticmethod
     def _collect_geojson_layer(tool_result: str, layers: list[dict]):
-        """Si el resultado de una herramienta es un GeoJSON FeatureCollection, lo acumula en layers."""
+        """Si el resultado de una herramienta es un GeoJSON FeatureCollection, lo acumula en layers.
+
+        Si las features tienen label ``"bbox"`` o ``"contour"``, las separa en dos
+        capas distintas (``AGENT_MRE_Piscinas`` y ``AGENT_Piscinas``).  En caso
+        contrario usa el label de la primera feature como nombre de capa (comportamiento
+        anterior).
+        """
         try:
             parsed = json.loads(tool_result)
             if isinstance(parsed, dict) and parsed.get("type") == "FeatureCollection":
-                label = "Detecciones"
                 features = parsed.get("features", [])
-                if features and features[0].get("properties", {}).get("label"):
-                    label = features[0]["properties"]["label"] + " detectados"
-                layers.append({
-                    "type": "geojson",
-                    "source": parsed,
-                    "name": label,
-                })
-        except (json.JSONDecodeError, TypeError):
-            pass
+
+                # Agrupar features por label
+                groups: dict[str, list] = {}
+                for f in features:
+                    lbl = f.get("properties", {}).get("label", "")
+                    groups.setdefault(lbl, []).append(f)
+
+                # Si hay los labels conocidos "bbox"/"contour", separar en dos capas fijas
+                LAYER_NAMES = {"bbox": "AGENT_MRE_Piscinas", "contour": "AGENT_Piscinas"}
+                CONTOUR_STYLE = {
+                    "polygon": {
+                        "fill": {
+                            "color": "#90CAF9",
+                            "opacity": 0.5,
+                        },
+                        "stroke": {
+                            "color": "#0D47A1",
+                            "width": 3,
+                        },
+                    },
+                }
+                if any(lbl in LAYER_NAMES for lbl in groups):
+                    for lbl, group_features in groups.items():
+                        if lbl in LAYER_NAMES and group_features:
+                            layer = {
+                                "type": "geojson",
+                                "source": {
+                                    "type": "FeatureCollection",
+                                    "features": group_features,
+                                },
+                                "name": LAYER_NAMES[lbl],
+                            }
+                            if lbl == "contour":
+                                layer["style"] = CONTOUR_STYLE
+                            layers.append(layer)
+                            logger.info(
+                                "Layer GeoJSON '%s': %d features",
+                                LAYER_NAMES[lbl], len(group_features),
+                            )
+                else:
+                    # Comportamiento anterior: capa única con el label de la primera feature
+                    label = "Detecciones"
+                    if features and features[0].get("properties", {}).get("label"):
+                        label = features[0]["properties"]["label"] + " detectados"
+                    layers.append({
+                        "type": "geojson",
+                        "source": parsed,
+                        "name": label,
+                    })
+                    logger.info(
+                        "Layer GeoJSON recolectado: %d features, label='%s'",
+                        len(features), label,
+                    )
+            else:
+                logger.debug(
+                    "Tool result no es FeatureCollection (type=%s)",
+                    parsed.get("type") if isinstance(parsed, dict) else type(parsed).__name__,
+                )
+        except (json.JSONDecodeError, TypeError) as exc:
+            logger.debug("Tool result no es JSON válido para layer: %s", exc)
 
     @staticmethod
     def _format_mcp_result(result) -> str:

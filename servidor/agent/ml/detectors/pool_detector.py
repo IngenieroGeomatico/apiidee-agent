@@ -53,7 +53,7 @@ class PoolDetector(BaseDetector):
         if not _MODEL_PATH.exists():
             logger.warning(
                 "Modelo ONNX no encontrado en %s. "
-                "Ejecuta: python scripts/download_pool_model.py",
+                "Ejecuta: python -m ml_models.utils.download",
                 _MODEL_PATH,
             )
             return None
@@ -82,7 +82,7 @@ class PoolDetector(BaseDetector):
             geojson = self._segment_pools_opencv(image, bbox, srs)
             return self._reproject_geojson(geojson, srs)
 
-        geojson = self._boxes_to_geojson(boxes, orig_w, orig_h, bbox, srs)
+        geojson = self._boxes_to_geojson(boxes, img_array, orig_w, orig_h, bbox, srs)
         return self._reproject_geojson(geojson, srs)
 
     # ── Preprocesado / Postprocesado YOLO ONNX (v8/v11) ────────────
@@ -229,6 +229,27 @@ class PoolDetector(BaseDetector):
                 shape_score += max(0, (0.55 - circularity) / 0.55) * 0.2
 
             confidence = min(0.95, round(size_score * 0.4 + shape_score * 0.6, 3))
+
+            # 1. Feature Bounding Box (etiqueta "bbox")
+            bbox_x1, bbox_y1, bbox_w, bbox_h = cv2.boundingRect(cnt)
+            bbox_x2 = bbox_x1 + bbox_w
+            bbox_y2 = bbox_y1 + bbox_h
+            bbox_geo = self._bbox_to_polygon(
+                bbox_x1, bbox_y1, bbox_x2, bbox_y2,
+                img.shape[1], img.shape[0], bbox,
+            )
+            features.append({
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [bbox_geo]},
+                "properties": {
+                    "detector": self.name,
+                    "label": "bbox",
+                    "model": "Segmentación por color (OpenCV)",
+                    "confidence": confidence,
+                },
+            })
+
+            # 2. Feature Contorno real (etiqueta "contour")
             features.append({
                 "type": "Feature",
                 "geometry": {
@@ -237,7 +258,7 @@ class PoolDetector(BaseDetector):
                 },
                 "properties": {
                     "detector": self.name,
-                    "label": "Piscina",
+                    "label": "contour",
                     "model": "Segmentación por color (OpenCV)",
                     "confidence": confidence,
                 },
@@ -248,29 +269,108 @@ class PoolDetector(BaseDetector):
         )
         return {"type": "FeatureCollection", "features": features}
 
+    # ── Refinado de contornos con OpenCV ────────────────────────────
+
+    def _refine_box_contour(self, img: np.ndarray, box: Dict) -> List:
+        import cv2
+        x1, y1, x2, y2 = int(box["x1"]), int(box["y1"]), int(box["x2"]), int(box["y2"])
+        crop = img[y1:y2, x1:x2]
+        if crop.size == 0:
+            return None
+
+        hsv = cv2.cvtColor(crop, cv2.COLOR_RGB2HSV)
+        lower_blue = np.array([85, 40, 40])
+        upper_blue = np.array([130, 255, 255])
+        mask = cv2.inRange(hsv, lower_blue, upper_blue)
+
+        kernel = np.ones((5, 5), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+
+        crop_h, crop_w = crop.shape[:2]
+        crop_center = (crop_w / 2, crop_h / 2)
+        crop_area = crop_w * crop_h
+
+        best = None
+        best_score = -1
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area < crop_area * 0.05 or area > crop_area * 0.98:
+                continue
+            peri = cv2.arcLength(cnt, True)
+            if peri == 0:
+                continue
+            M = cv2.moments(cnt)
+            if M["m00"] == 0:
+                continue
+            cx = M["m10"] / M["m00"]
+            cy = M["m01"] / M["m00"]
+            dist = np.sqrt((cx - crop_center[0])**2 + (cy - crop_center[1])**2)
+            max_dist = np.sqrt(crop_center[0]**2 + crop_center[1]**2)
+            proximity = 1.0 - dist / max_dist if max_dist > 0 else 1.0
+            area_ratio = area / crop_area
+            area_score = 1.0 - abs(area_ratio - 0.5) * 2
+            score = proximity * 0.5 + area_score * 0.5
+            if score > best_score:
+                best_score = score
+                best = cnt
+
+        if best is None:
+            return None
+
+        peri = cv2.arcLength(best, True)
+        epsilon = 0.025 * peri
+        approx = cv2.approxPolyDP(best, epsilon, True)
+
+        offset = np.array([x1, y1])
+        return (approx + offset).reshape(-1, 2).tolist()
+
     # ── Conversión a GeoJSON ────────────────────────────────────────
 
     def _boxes_to_geojson(
-        self, boxes: List[Dict], img_w: int, img_h: int,
+        self, boxes: List[Dict], img: np.ndarray, img_w: int, img_h: int,
         bbox: Dict, srs: str,
     ) -> Dict:
         features = []
         for box in boxes:
             x1, y1, x2, y2 = box["x1"], box["y1"], box["x2"], box["y2"]
-            polygon = self._bbox_to_polygon(x1, y1, x2, y2, img_w, img_h, bbox)
+            conf = round(box["confidence"], 3)
+
+            # 1. Feature Bounding Box (etiqueta "bbox")
+            bbox_poly = self._bbox_to_polygon(x1, y1, x2, y2, img_w, img_h, bbox)
             features.append({
                 "type": "Feature",
-                "geometry": {
-                    "type": "Polygon",
-                    "coordinates": [polygon],
-                },
+                "geometry": {"type": "Polygon", "coordinates": [bbox_poly]},
                 "properties": {
                     "detector": self.name,
-                    "label": "Piscina",
+                    "label": "bbox",
                     "model": "YOLOv11n (ONNX)",
-                    "confidence": round(box["confidence"], 3),
+                    "confidence": conf,
                 },
             })
+
+            # 2. Feature Contorno real (etiqueta "contour")
+            polygon_px = self._refine_box_contour(img, box)
+            if polygon_px and len(polygon_px) >= 3:
+                polygon_px.append(polygon_px[0])
+                contour_poly = [
+                    PoolDetector._pixel_to_geo(px, py, img_w, img_h, bbox)
+                    for px, py in polygon_px
+                ]
+                features.append({
+                    "type": "Feature",
+                    "geometry": {"type": "Polygon", "coordinates": [contour_poly]},
+                    "properties": {
+                        "detector": self.name,
+                        "label": "contour",
+                        "model": "YOLOv11n (ONNX)",
+                        "confidence": conf,
+                    },
+                })
 
         logger.info(
             "ONNX: %d detecciones en bbox %s", len(features), bbox,

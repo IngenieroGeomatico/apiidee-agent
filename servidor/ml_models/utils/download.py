@@ -9,7 +9,7 @@ Flujo para modelos que requieren conversión a ONNX:
 Se ejecuta automáticamente al arrancar Django (via apps.py) y también
 se puede lanzar manualmente::
 
-    python -m ml_models.download
+    python -m ml_models.utils.download
 """
 import logging
 import subprocess
@@ -19,7 +19,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_MODEL_DIR = Path(__file__).resolve().parent
+_MODEL_DIR = Path(__file__).resolve().parent.parent
+_TMP_DIR = _MODEL_DIR / "tmp"
 
 # ── Registro de modelos ─────────────────────────────────────────────
 #
@@ -37,6 +38,15 @@ _MODELS = {
             "pool-detection/master/best.pt"
         ),
         "description": "YOLOv11n (~5 MB) fine-tuned para detección de piscinas",
+        "imgsz": 640,
+    },
+    "pool_seg.onnx": {
+        "pt_url": None,
+        "description": (
+            "YOLO11n-seg fine-tuned para segmentación de piscinas. "
+            "Generado con ml_models/utils/train_pool_seg.py. "
+            "Copiar manualmente el ONNX a ml_models/ tras entrenar."
+        ),
         "imgsz": 640,
     },
 }
@@ -132,7 +142,16 @@ def _convert_pt_to_onnx(pt_path: Path, onnx_path: Path, imgsz: int = 640) -> boo
 def download_and_convert(onnx_filename: str, info: dict) -> bool:
     """Descarga un .pt, lo convierte a ONNX y limpia el .pt intermedio."""
     onnx_path = _MODEL_DIR / onnx_filename
-    pt_path = _MODEL_DIR / (onnx_path.stem + "_temp.pt")
+
+    if info.get("pt_url") is None:
+        logger.info(
+            "%s no tiene URL de descarga automática. "
+            "Debe generarse con ml_models/utils/train_pool_seg.py y copiarse manualmente.",
+            onnx_filename,
+        )
+        return False
+
+    pt_path = _TMP_DIR / (onnx_path.stem + "_temp.pt")
 
     # 1. Descargar .pt
     if not _download_file(info["pt_url"], pt_path, info["description"]):
