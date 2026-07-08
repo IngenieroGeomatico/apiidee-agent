@@ -9,7 +9,7 @@ Conceptos:
 """
 import json
 import logging
-from typing import Optional
+from typing import Generator, Optional
 
 from .llm.config import get_llm_provider, get_provider
 from .prompts import SYSTEM_PROMPT
@@ -118,6 +118,96 @@ class Agent:
         system_prompt = self._build_system_prompt(rag_results, map_state)
         llm_messages = [{"role": "system", "content": system_prompt}, *history]
         return self._run_llm_loop(llm_messages, rag_results)
+
+    def run_stream(self, user_message: str, history: list,
+                   map_state: Optional[dict] = None) -> Generator[dict, None, None]:
+        """
+        Procesa un mensaje del usuario y hace yield de eventos SSE.
+
+        Eventos emitidos (formato dict):
+          - ``{"type": "text_delta", "text": "..."}``  — fragmento de texto
+          - ``{"type": "tool_call", "toolCalls": [...]}`` — tool calls del mapa
+          - ``{"type": "sources", "sources": [...]}`` — fuentes RAG
+          - ``{"type": "layer", "layer": {...}}`` — capa GeoJSON (detecciones ML)
+          - ``{"type": "done"}`` — fin del stream
+
+        Las herramientas server-side y MCP se ejecutan en línea (sin
+        streamear). Solo el texto de la respuesta final se streamea.
+        """
+        rag_results = retrieve_context(query=user_message)
+        system_prompt = self._build_system_prompt(rag_results, map_state)
+        llm_messages = [{"role": "system", "content": system_prompt}, *history]
+        sources = [chunk["metadata"] for chunk in rag_results] if rag_results else []
+
+        yield from self._stream_llm_loop(llm_messages, sources)
+
+    def _stream_llm_loop(self, llm_messages: list, sources: list,
+                         max_iterations: int = 5) -> Generator[dict, None, None]:
+        """Bucle de streaming: ejecuta tools server/MCP en línea, streamea texto."""
+        tools = get_langchain_tools()
+        layers: list[dict] = []
+
+        for _iteration in range(max_iterations):
+            # Intentar streamear primero
+            accumulated_text = ""
+            accumulated_tool_calls = []
+            has_tool_calls = False
+
+            for chunk in self.provider.stream(llm_messages, tools=tools if tools else None):
+                if chunk.has_tool_calls:
+                    has_tool_calls = True
+                    accumulated_tool_calls = chunk.tool_calls
+                elif chunk.content:
+                    accumulated_text += chunk.content
+                    yield {"type": "text_delta", "text": chunk.content}
+
+            if not has_tool_calls:
+                # Solo texto — emitir metadata y terminar
+                if sources:
+                    yield {"type": "sources", "sources": sources}
+                for layer in layers:
+                    yield {"type": "layer", "layer": layer}
+                yield {"type": "done"}
+                return
+
+            # Hay tool calls — clasificar y ejecutar
+            server_calls, mcp_calls, map_calls = self._classify_tool_calls(
+                accumulated_tool_calls,
+            )
+
+            if server_calls or mcp_calls:
+                # Ejecutar server/MCP tools en línea (sin streamear)
+                for tc in server_calls:
+                    formatted = self._execute_server_tool(tc)
+                    self._append_tool_messages(llm_messages, type("R", (), {"content": accumulated_text})(), tc, formatted)
+                    self._collect_geojson_layer(formatted, layers)
+
+                for tc in mcp_calls:
+                    formatted = self._execute_mcp_tool(tc)
+                    self._append_tool_messages(llm_messages, type("R", (), {"content": accumulated_text})(), tc, formatted)
+
+                if map_calls:
+                    yield {"type": "tool_call", "toolCalls": map_calls}
+                    if sources:
+                        yield {"type": "sources", "sources": sources}
+                    for layer in layers:
+                        yield {"type": "layer", "layer": layer}
+                    yield {"type": "done"}
+                    return
+                # Continuar loop para que el LLM procese los resultados
+            else:
+                # Solo map calls — emitir y terminar
+                yield {"type": "tool_call", "toolCalls": map_calls}
+                if sources:
+                    yield {"type": "sources", "sources": sources}
+                for layer in layers:
+                    yield {"type": "layer", "layer": layer}
+                yield {"type": "done"}
+                return
+
+        logger.warning("Stream: MCP iteration limit (%d) reached", max_iterations)
+        yield {"type": "text_delta", "text": "Se alcanzó el límite de iteraciones."}
+        yield {"type": "done"}
 
     def process_tool_result(self, tool_name: str, tool_result: dict,
                             success: bool, history: list) -> AgentResponse:

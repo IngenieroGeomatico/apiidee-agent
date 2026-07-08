@@ -28,6 +28,7 @@ class ChatInputSerializer(serializers.Serializer):
     provider = serializers.CharField(max_length=100, required=False, default=None)
     model = serializers.CharField(max_length=200, required=False, default=None)
     api_key = serializers.CharField(max_length=500, required=False, default=None, write_only=True)
+    stream = serializers.BooleanField(required=False, default=False)
 
 
 class ToolResultSerializer(serializers.Serializer):
