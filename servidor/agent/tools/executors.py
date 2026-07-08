@@ -7,7 +7,8 @@ similar a las herramientas MCP pero sin requerir un servidor MCP externo.
 """
 import json
 import logging
-from typing import Any, Callable, Dict, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable, Dict, Optional
 from urllib.request import Request, urlopen
 from urllib.parse import urlencode
 
@@ -65,39 +66,30 @@ def _geo_candidates_url(q: str) -> str:
     return "https://www.cartociudad.es/geocoder/api/geocoder/candidates?" + urlencode(params)
 
 
-def _add_layer_instruction(url: str, name: str) -> str:
-    safe = json.dumps(name, ensure_ascii=False)
-    return f"Call addLayer(type='GEOJSON', url=\"{url}\", name={safe}, fit=true)"
-
-
-def _format_candidate(idx: int, c: dict) -> str:
+def _format_candidate(idx: int, c: dict) -> dict:
+    """Formatea un candidato del geocoder como dict estructurado."""
     addr = c.get("address", "")
     ctype = c.get("type", "")
     muni = c.get("muni", "")
     cid = c.get("id", "")
     lat = c.get("lat", 0)
     lng = c.get("lng", 0)
-    coords_str = f"lat={lat}, lon={lng}" if lat and lng and float(lat) != 0 and float(lng) != 0 else ""
     find_params = {"id": cid, "type": ctype, "outputformat": "geoJson"}
     if addr:
         find_params["q"] = addr
     url = _geo_find_url(find_params)
-    parts = f"[{idx + 1}] {addr} — {ctype} — {muni}"
-    if coords_str:
-        parts += f" ({coords_str})"
-    parts += f"\n    url={url}"
-    return parts
-
-
-_CANDIDATE_HTML_INSTRUCTIONS = (
-    "\nShow candidates as a clean numbered list."
-    "\nEach candidate is a clickable DIV:"
-    "\n<div class=\"candidate-btn\" onclick=\"window.chatagentQuickReply('ADD LAYER: url | name')\">N. ADDR <span class=\"candidate-meta\">CTYPE — MUNI</span></div>"
-    "\nReplace url, ADDR, CTYPE, MUNI, N with actual values."
-    "\nAfter showing the list, ask: \u00bfCu\u00e1l quieres cargar en el mapa?"
-    "\nWhen user sends 'ADD LAYER: url | name', extract the url and name and call addLayer(type='GEOJSON', url=url, name=name, fit=true)."
-    "\nDo NOT call geocodePlace again."
-)
+    candidate = {
+        "index": idx + 1,
+        "address": addr,
+        "type": ctype,
+        "municipality": muni,
+        "id": cid,
+        "geojsonURL": url,
+    }
+    if lat and lng and float(lat) != 0 and float(lng) != 0:
+        candidate["lat"] = float(lat)
+        candidate["lon"] = float(lng)
+    return candidate
 
 
 def _fetch_candidates(url: str) -> list | None:
@@ -118,9 +110,6 @@ def _fetch_candidates(url: str) -> list | None:
 def geocode_place(q: str = "", id: str = "", type: str = "",
                   portal: str = "", **kwargs) -> dict:
     """Busca un lugar con el geocoder de Cartociudad y devuelve su geometría."""
-    from urllib.parse import urlencode
-    import json as json_module
-
     logger.info("Geocoding place: q=%s, id=%s, type=%s, portal=%s", q, id, type, portal)
 
     if id and type:
@@ -134,18 +123,24 @@ def geocode_place(q: str = "", id: str = "", type: str = "",
         # Return structured result with URL and name
         return {"geojsonURL": geojson_url, "name": name}
 
-    find_q = q
     geojson_url = _geo_find_url({"q": q, "outputformat": "geoJson"})
-    candidates_url = _geo_candidates_url(find_q)
+    candidates_url = _geo_candidates_url(q)
     candidates = _fetch_candidates(candidates_url)
 
     if candidates is not None:
-        lines = [_format_candidate(i, c) for i, c in enumerate(candidates)]
-        return (f"Candidates for {json.dumps(q, ensure_ascii=False)}:\n"
-                + "\n".join(lines)
-                + _CANDIDATE_HTML_INSTRUCTIONS)
+        formatted = [_format_candidate(i, c) for i, c in enumerate(candidates)]
+        return {
+            "candidates": formatted,
+            "query": q,
+            "instructions": (
+                "Present the candidates as a numbered list to the user. "
+                "For each candidate show: address, type, municipality. "
+                "Ask the user which one to load on the map. "
+                "When the user chooses, call geocodePlace with the candidate's id and type to get its GeoJSON. "
+                "Do NOT generate HTML. Do NOT call geocodePlace with the original query again."
+            ),
+        }
 
-    safe_q = json.dumps(q, ensure_ascii=False)
     fallback_msg = f"No candidates found for: {q}"
     # Return fallback with GeoJSON URL
     return {"geojsonURL": geojson_url, "name": q, "message": fallback_msg}
@@ -177,11 +172,52 @@ def _idee_api_url(cat_id: str) -> str:
     return f"{_IDEE_BASE}?{params}"
 
 
+def _fetch_idee_category(cat_id: str, layer_type: str, cat_label: str,
+                         query_lower: str) -> list:
+    """Descarga y filtra servicios de una categoría IDEE.
+
+    Se ejecuta en un hilo del pool para paralelizar las peticiones HTTP.
+    """
+    url = _idee_api_url(cat_id)
+    matches = []
+    try:
+        req = Request(url, headers={"User-Agent": "APIIDEEAgent/1.0"})
+        with urlopen(req, timeout=20) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+        data = json.loads(raw)
+    except Exception as e:
+        logger.warning("Error fetching category %s (%s): %s", cat_id, cat_label, e)
+        return matches
+
+    servicios = data.get("datos", {})
+    for org_level in ("est", "aut", "loc", "pve"):
+        orgs = servicios.get(org_level, [])
+        if not isinstance(orgs, list):
+            continue
+        for org in orgs:
+            org_name = org.get("name", "")
+            for org_item in org.get("listorg", []):
+                for srv in org_item.get("listserv", []):
+                    srv_name = srv.get("name", "")
+                    srv_url = srv.get("url", "")
+                    if not srv_name or not srv_url:
+                        continue
+                    if query_lower in srv_name.lower():
+                        matches.append({
+                            "name": srv_name,
+                            "url": srv_url,
+                            "type": layer_type,
+                            "category": cat_label,
+                            "organization": org_name,
+                        })
+    return matches
+
+
 @register("searchIdeeService")
 def search_idee_service(query: str, **kwargs) -> str:
     """Search for a service by name in the IDEE service directory.
 
-    Iterates through service categories, calls the IDEE JSON API,
+    Queries all service categories in parallel using a thread pool,
     and returns matching services with their URL and correct addLayer type.
     """
     q = query.strip().lower()
@@ -190,38 +226,16 @@ def search_idee_service(query: str, **kwargs) -> str:
 
     results = []
 
-    for cat_id, layer_type, cat_label in _IDEE_CATEGORIES:
-        url = _idee_api_url(cat_id)
-        try:
-            req = Request(url, headers={"User-Agent": "APIIDEEAgent/1.0"})
-            with urlopen(req, timeout=20) as resp:
-                raw = resp.read().decode("utf-8", errors="ignore")
-            data = json.loads(raw)
-        except Exception as e:
-            logger.warning("Error fetching category %s (%s): %s", cat_id, cat_label, e)
-            continue
-
-        servicios = data.get("datos", {})
-        for org_level in ("est", "aut", "loc", "pve"):
-            orgs = servicios.get(org_level, [])
-            if not isinstance(orgs, list):
-                continue
-            for org in orgs:
-                org_name = org.get("name", "")
-                for org_item in org.get("listorg", []):
-                    for srv in org_item.get("listserv", []):
-                        srv_name = srv.get("name", "")
-                        srv_url = srv.get("url", "")
-                        if not srv_name or not srv_url:
-                            continue
-                        if q in srv_name.lower():
-                            results.append({
-                                "name": srv_name,
-                                "url": srv_url,
-                                "type": layer_type,
-                                "category": cat_label,
-                                "organization": org_name,
-                            })
+    with ThreadPoolExecutor(max_workers=len(_IDEE_CATEGORIES)) as pool:
+        futures = {
+            pool.submit(_fetch_idee_category, cat_id, layer_type, cat_label, q): cat_label
+            for cat_id, layer_type, cat_label in _IDEE_CATEGORIES
+        }
+        for future in as_completed(futures):
+            try:
+                results.extend(future.result())
+            except Exception as e:
+                logger.warning("Error in IDEE category %s: %s", futures[future], e)
 
     if not results:
         return json.dumps(
@@ -280,17 +294,6 @@ def list_detectors_tool(**kwargs) -> str:
     return "\n".join(lines)
 
 
-_pending_detection_geojson = None
-
-
-def pop_pending_detection_geojson() -> dict | None:
-    """Obtiene el último GeoJSON de detección y lo limpia."""
-    global _pending_detection_geojson
-    result = _pending_detection_geojson
-    _pending_detection_geojson = None
-    return result
-
-
 @register("detectObjects")
 def detect_objects_tool(detector: str, bbox: dict, srs: str = "EPSG:3857",
                         wms_url: str = None, wms_layer: str = None,
@@ -298,22 +301,10 @@ def detect_objects_tool(detector: str, bbox: dict, srs: str = "EPSG:3857",
     """Ejecuta un detector ML sobre la zona indicada y devuelve GeoJSON."""
     from agent.ml.inference import run_detection
 
-    result = run_detection(
+    return run_detection(
         detector_name=detector,
         bbox=bbox,
         srs=srs,
         wms_url=wms_url,
         wms_layer=wms_layer,
     )
-
-    global _pending_detection_geojson
-    try:
-        parsed = json.loads(result)
-        if isinstance(parsed, dict) and parsed.get("type") == "FeatureCollection":
-            _pending_detection_geojson = parsed
-        else:
-            _pending_detection_geojson = None
-    except Exception:
-        _pending_detection_geojson = None
-
-    return result

@@ -10,6 +10,8 @@ NO contienen lógica del agente (construcción de prompts, llamadas al LLM, recu
 """
 import json
 import logging
+import threading
+from collections import OrderedDict
 
 from django.conf import settings
 from django.http import JsonResponse
@@ -174,8 +176,9 @@ class ConversationViewSet(
             metadata={"role": "tool", "tool_call_id": tool_call_id, "tool_name": tool_name},
         )
 
-        # Si la herramienta es geocodePlace y el resultado incluye una URL de GeoJSON, responder directamente
-        if tool_name == "geocodePlace" and isinstance(result_data, dict) and result_data.get("geojsonURL"):
+        # Si el resultado incluye una URL de GeoJSON, responder directamente
+        # con un bloque layer para que el plugin lo cargue en el mapa.
+        if isinstance(result_data, dict) and result_data.get("geojsonURL"):
             assistant_msg = Message.objects.create(
                 conversation=conversation,
                 role=Message.Role.ASSISTANT,
@@ -241,32 +244,41 @@ def _build_history(conversation, max_messages: int = _MAX_HISTORY_MESSAGES) -> l
         messages.append(m)
     return messages
 
-from collections import OrderedDict
 
 _agent_cache: OrderedDict = OrderedDict()
+_agent_cache_lock = threading.Lock()
 _AGENT_CACHE_MAXSIZE = 128
 
 def _make_agent(provider_name, model, api_key):
     """Devuelve un Agent cacheado para esta combinación de proveedor/modelo/key.
 
     Los Agents no guardan estado entre peticiones, por lo que se pueden
-    reutilizar. El caché tiene un tamaño máximo LRU de {_AGENT_CACHE_MAXSIZE}
-    entradas para evitar fugas de memoria.
+    reutilizar. El caché tiene un tamaño máximo LRU de ``_AGENT_CACHE_MAXSIZE``
+    entradas para evitar fugas de memoria.  El acceso está protegido por
+    un lock para garantizar thread-safety.
     """
     cache_key = (provider_name, model, api_key)
-    try:
-        _agent_cache.move_to_end(cache_key)
-        return _agent_cache[cache_key]
-    except KeyError:
-        agent = Agent(provider_name=provider_name, model=model, api_key=api_key)
+    with _agent_cache_lock:
+        try:
+            _agent_cache.move_to_end(cache_key)
+            return _agent_cache[cache_key]
+        except KeyError:
+            pass
+    # Crear fuera del lock para no bloquear otros hilos durante la inicialización
+    agent = Agent(provider_name=provider_name, model=model, api_key=api_key)
+    with _agent_cache_lock:
         _agent_cache[cache_key] = agent
         if len(_agent_cache) > _AGENT_CACHE_MAXSIZE:
             _agent_cache.popitem(last=False)
-        return agent
+    return agent
 
 
 def _assistant_response(conversation, result, extra=None):
-    """Persiste la respuesta del asistente y devuelve un Response DRF."""
+    """Persiste la respuesta del asistente y devuelve un Response DRF.
+
+    Las capas GeoJSON generadas por herramientas del servidor (ej:
+    detecciones ML) se leen de ``result.layers`` — sin estado global.
+    """
     metadata = {"sources": result.sources}
     if extra:
         metadata.update(extra)
@@ -287,14 +299,9 @@ def _assistant_response(conversation, result, extra=None):
     if extra and "tool_calls" in extra:
         content.append({"type": "tool_call", "toolCalls": extra["tool_calls"]})
 
-    from .tools.executors import pop_pending_detection_geojson
-    detection_geojson = pop_pending_detection_geojson()
-    if detection_geojson:
-        label = "Detecciones"
-        features = detection_geojson.get("features", [])
-        if features and features[0].get("properties", {}).get("label"):
-            label = features[0]["properties"]["label"] + " detectados"
-        content.append({"type": "layer", "layer": {"type": "geojson", "source": detection_geojson, "name": label}})
+    # Incluir capas GeoJSON propagadas por el agente (ej: detecciones ML)
+    for layer in getattr(result, "layers", []):
+        content.append({"type": "layer", "layer": layer})
 
     data = {
         "id": raw["id"],
