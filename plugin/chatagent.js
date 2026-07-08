@@ -791,6 +791,14 @@ class ChatAgent {
     this.sendBtn = document.querySelector('#chatagent-send');
     this.providerSelect = document.querySelector('#chatagent-provider-select');
     this.modelSelect = document.querySelector('#chatagent-model-select');
+    // Cargar selección previa desde localStorage (si existe)
+    try {
+      var storedProvider = localStorage.getItem('chatagentProvider');
+      if (storedProvider) this.selectedProvider = storedProvider;
+      var storedModel = localStorage.getItem('chatagentModel');
+      if (storedModel) this.selectedModel = storedModel;
+    } catch(e) {}
+
     this.settingsToggle = document.querySelector('#chatagent-settings-toggle');
     this.settingsPanel = document.querySelector('#chatagent-settings-panel');
     this.historyToggle = document.querySelector('#chatagent-history-toggle');
@@ -835,11 +843,15 @@ class ChatAgent {
     if (this.providerSelect) {
       this.providerSelect.addEventListener('change', function() {
         self._onProviderChange(self.providerSelect.value);
+        // Guardar selección en localStorage
+        try { localStorage.setItem('chatagentProvider', self.providerSelect.value); } catch(e) {}
       });
     }
     if (this.modelSelect) {
       this.modelSelect.addEventListener('change', function() {
         self.selectedModel = self.modelSelect.value;
+        // Guardar selección en localStorage
+        try { localStorage.setItem('chatagentModel', self.modelSelect.value); } catch(e) {}
       });
     }
 
@@ -1046,6 +1058,8 @@ class ChatAgent {
       this.modelSelect.value = defaultModel;
     }
     this.selectedModel = this.modelSelect.value;
+    // Guardar modelo seleccionado en localStorage
+    try { localStorage.setItem('chatagentModel', this.selectedModel); } catch(e) {}
   }
 
   /** Refresca la barra de proveedor y el selector del panel de configuracion. */
