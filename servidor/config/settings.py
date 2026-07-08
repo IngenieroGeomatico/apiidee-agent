@@ -23,7 +23,7 @@ SECRET_KEY = os.getenv(
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 'yes')
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
 
 # Application definition
@@ -129,9 +129,8 @@ REST_FRAMEWORK = {
 # ---------------------------------------------------------------------------
 
 _origins = os.getenv('ALLOWED_ORIGINS', 'http://localhost:8080')
-# CORS_ALLOWED_ORIGINS = [o.strip() for o in _origins.split(',') if o.strip()] # Temporarily disable for debugging
-# CORS_ALLOW_CREDENTIALS = True # Temporarily disable for debugging
-CORS_ALLOW_ALL_ORIGINS = True # TEMPORARY: Allow all origins for debugging CORS
+CORS_ALLOWED_ORIGINS = [o.strip() for o in _origins.split(',') if o.strip()]
+CORS_ALLOW_CREDENTIALS = True
 
 
 # ---------------------------------------------------------------------------
