@@ -123,8 +123,9 @@ class ConversationCRUDTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 2)
-        self.assertEqual(response.data[0]["content"], "primero")
-        self.assertEqual(response.data[1]["content"], "segundo")
+        # content es una lista de bloques (formato Anthropic/MCP)
+        self.assertEqual(response.data[0]["content"], [{"type": "text", "text": "primero"}])
+        self.assertEqual(response.data[1]["content"], [{"type": "text", "text": "segundo"}])
 
 
 class BuildHistoryTests(TestCase):
@@ -170,12 +171,23 @@ class BuildHistoryTests(TestCase):
         """Mensajes con role USER se mapean a 'user'."""
         Message.objects.create(
             conversation=self.conversation,
-            role=Message.Role.SYSTEM,
-            content=[{"type": "tool_result", "tool_name": "zoomTo", "content": {}, "success": true, "tool_call_id": "call_123"}],
-            metadata={"role": "tool", "tool_call_id": "call_123", "tool_name": "zoomTo"},
+            role=Message.Role.USER,
+            content=[{"type": "text", "text": "Hola"}],
         )
         result = _build_history(self.conversation)
         self.assertEqual(result[0]["role"], "user")
+
+    def test_role_mapping_tool_result(self):
+        """Mensajes de tool_result con metadata role='tool' se mapean a 'tool'."""
+        Message.objects.create(
+            conversation=self.conversation,
+            role=Message.Role.SYSTEM,
+            content=[{"type": "tool_result", "tool_name": "zoomTo", "content": {}, "success": True, "tool_call_id": "call_123"}],
+            metadata={"role": "tool", "tool_call_id": "call_123", "tool_name": "zoomTo"},
+        )
+        result = _build_history(self.conversation)
+        self.assertEqual(result[0]["role"], "tool")
+        self.assertEqual(result[0]["tool_call_id"], "call_123")
 
     def test_role_mapping_assistant(self):
         """Mensajes con role ASSISTANT se mapean a 'assistant'."""
@@ -318,3 +330,60 @@ class MakeAgentCacheTests(TestCase):
         mock_agent_cls.assert_called_once_with(
             provider_name="gemini", model="gemini-pro", api_key="AIza-test"
         )
+
+
+class AssistantResponseLayersTests(TestCase):
+    """Tests para la propagación de layers GeoJSON en _assistant_response."""
+
+    def setUp(self):
+        self.conversation = Conversation.objects.create(title="Layers test")
+
+    def test_layers_se_incluyen_en_respuesta(self):
+        """Las capas GeoJSON de result.layers se añaden como bloques layer al content."""
+        from agent.agent import AgentResponse
+        from agent.views import _assistant_response
+
+        geojson = {"type": "FeatureCollection", "features": []}
+        result = AgentResponse.text(
+            "Detección completada",
+            layers=[{"type": "geojson", "source": geojson, "name": "Piscinas"}],
+        )
+        response = _assistant_response(self.conversation, result)
+        content = response.data["content"]
+
+        layer_blocks = [b for b in content if b.get("type") == "layer"]
+        self.assertEqual(len(layer_blocks), 1)
+        self.assertEqual(layer_blocks[0]["layer"]["name"], "Piscinas")
+        self.assertEqual(layer_blocks[0]["layer"]["type"], "geojson")
+
+    def test_sin_layers_no_hay_bloques_layer(self):
+        """Sin layers, la respuesta no contiene bloques layer."""
+        from agent.agent import AgentResponse
+        from agent.views import _assistant_response
+
+        result = AgentResponse.text("Respuesta normal")
+        response = _assistant_response(self.conversation, result)
+        content = response.data["content"]
+
+        layer_blocks = [b for b in content if b.get("type") == "layer"]
+        self.assertEqual(len(layer_blocks), 0)
+
+    def test_multiples_layers(self):
+        """Múltiples layers se añaden como bloques separados."""
+        from agent.agent import AgentResponse
+        from agent.views import _assistant_response
+
+        result = AgentResponse.text(
+            "Varias detecciones",
+            layers=[
+                {"type": "geojson", "source": {}, "name": "Piscinas"},
+                {"type": "geojson", "source": {}, "name": "Edificios"},
+            ],
+        )
+        response = _assistant_response(self.conversation, result)
+        content = response.data["content"]
+
+        layer_blocks = [b for b in content if b.get("type") == "layer"]
+        self.assertEqual(len(layer_blocks), 2)
+        names = {b["layer"]["name"] for b in layer_blocks}
+        self.assertEqual(names, {"Piscinas", "Edificios"})
