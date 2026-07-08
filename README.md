@@ -688,6 +688,39 @@ Todos los caches del servidor estan protegidos con `threading.Lock` para garanti
 
 La tool `searchIdeeService` consulta las 6 categorias del directorio IDEE en paralelo usando `ThreadPoolExecutor`, en vez de secuencialmente.
 
+## Historial de conversaciones
+
+Las conversaciones se persisten en el servidor y el plugin las gestiona en el navegador.
+
+### Como funciona
+
+- El plugin guarda los IDs de sus conversaciones en `localStorage` (`chatagent_conversations`)
+- Al abrir el chat, pide al servidor solo sus conversaciones via `POST /api/conversations/by-ids/`
+- Un panel lateral (icono reloj en el header) muestra el historial con titulo y fecha
+- Click en una conversacion la reanuda, cargando sus mensajes
+- Boton "Nueva conversacion" para empezar de cero
+
+### Limites configurables
+
+| Variable | Default | Descripcion |
+|----------|---------|-------------|
+| `CONVERSATION_TTL_HOURS` | 24 | Horas sin actividad tras las que se borra una conversacion |
+| `CONVERSATION_MAX_PER_CLIENT` | 10 | Maximo de conversaciones por cliente (FIFO en localStorage) |
+| `CONVERSATION_CLEANUP_INTERVAL_SECONDS` | 3600 | Intervalo minimo entre limpiezas automaticas |
+
+La limpieza se ejecuta automaticamente (lazy) al crear conversaciones. Tambien se puede lanzar manualmente:
+
+```bash
+# Limpiar conversaciones expiradas
+python manage.py cleanup_conversations
+
+# Con TTL personalizado
+python manage.py cleanup_conversations --hours 48
+
+# Solo ver cuantas se borrarian
+python manage.py cleanup_conversations --dry-run
+```
+
 ## Estructura del proyecto
 
 ```
@@ -764,6 +797,8 @@ apiidee-agent/
 | `GET` | `/api/conversations/{id}/messages/` | Listar mensajes |
 | `POST` | `/api/conversations/{id}/chat/` | Enviar mensaje (responde texto, tool_call o SSE si `stream=true`) |
 | `POST` | `/api/conversations/{id}/tool-result/` | Enviar resultado de ejecucion de tool |
+| `POST` | `/api/conversations/by-ids/` | Obtener conversaciones por lista de UUIDs (para el plugin) |
+| `GET` | `/api/conversation-config/` | Configuracion de conversaciones (TTL, limite por cliente) |
 | `POST` | `/api/test-key/` | Probar API key contra un proveedor (`provider` + `api_key`) |
 
 ### Ejemplo: enviar mensaje
