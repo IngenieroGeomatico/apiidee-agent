@@ -11,10 +11,13 @@ NO contienen lógica del agente (construcción de prompts, llamadas al LLM, recu
 import json
 import logging
 import threading
+import time
 from collections import OrderedDict
+from datetime import timedelta
 
 from django.conf import settings
 from django.http import JsonResponse, StreamingHttpResponse
+from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
@@ -98,12 +101,37 @@ class ConversationViewSet(
     serializer_class = ConversationSerializer
 
     def create(self, request, *args, **kwargs):
-        """Crea una nueva conversación."""
+        """Crea una nueva conversación. Ejecuta limpieza lazy de conversaciones expiradas."""
+        _lazy_cleanup()
         return super().create(request, *args, **kwargs)
 
     def list(self, request, *args, **kwargs):
         """Lista todas las conversaciones."""
         return super().list(request, *args, **kwargs)
+
+    @action(detail=False, methods=['post'], url_path='by-ids')
+    def by_ids(self, request):
+        """Devuelve solo las conversaciones cuyos IDs se pasen en el body.
+
+        Body: ``{"ids": ["uuid-1", "uuid-2", ...]}``
+
+        Filtra las expiradas por TTL antes de devolver.  Esto permite
+        que el plugin solo pida sus conversaciones (guardadas en localStorage)
+        sin exponer el listado completo del servidor.
+        """
+        ids = request.data.get("ids", [])
+        if not ids or not isinstance(ids, list):
+            return Response([])
+
+        ttl_hours = getattr(settings, "CONVERSATION_TTL_HOURS", 24)
+        cutoff = timezone.now() - timedelta(hours=ttl_hours)
+
+        conversations = Conversation.objects.filter(
+            id__in=ids, updated_at__gte=cutoff,
+        ).order_by("-updated_at")
+
+        serializer = ConversationSerializer(conversations, many=True)
+        return Response(serializer.data)
 
     def retrieve(self, request, *args, **kwargs):
         """Recupera una conversación por su ID."""
@@ -210,6 +238,50 @@ class ConversationViewSet(
         result = agent.process_tool_result(tool_name, result_data, success, history)
 
         return _assistant_response(conversation, result)
+
+
+# ---------------------------------------------------------------------------
+# Limpieza lazy de conversaciones expiradas
+# ---------------------------------------------------------------------------
+
+_last_cleanup_time = 0.0
+_cleanup_lock = threading.Lock()
+
+
+def _lazy_cleanup():
+    """Borra conversaciones expiradas si ha pasado el intervalo configurado.
+
+    Se ejecuta en cada ``create`` de conversación para no necesitar cron
+    ni celery.  El lock evita que múltiples hilos limpien a la vez.
+    """
+    global _last_cleanup_time
+    interval = getattr(settings, "CONVERSATION_CLEANUP_INTERVAL_SECONDS", 3600)
+    now = time.monotonic()
+    if now - _last_cleanup_time < interval:
+        return
+    with _cleanup_lock:
+        if now - _last_cleanup_time < interval:
+            return
+        _last_cleanup_time = now
+
+    ttl_hours = getattr(settings, "CONVERSATION_TTL_HOURS", 24)
+    cutoff = timezone.now() - timedelta(hours=ttl_hours)
+    deleted, _ = Conversation.objects.filter(updated_at__lt=cutoff).delete()
+    if deleted:
+        logger.info("Lazy cleanup: eliminadas %d conversaciones expiradas (TTL=%dh)", deleted, ttl_hours)
+
+
+@api_view(["GET"])
+def conversation_config(request):
+    """Devuelve la configuración de conversaciones para el plugin.
+
+    El plugin usa estos valores para limitar el localStorage y
+    mostrar al usuario cuánto tiempo se guardan las conversaciones.
+    """
+    return Response({
+        "ttl_hours": getattr(settings, "CONVERSATION_TTL_HOURS", 24),
+        "max_per_client": getattr(settings, "CONVERSATION_MAX_PER_CLIENT", 10),
+    })
 
 
 def _stream_response(conversation, agent, user_content, history, map_state):
