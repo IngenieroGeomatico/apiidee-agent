@@ -7,7 +7,9 @@ para evitar E/S repetitiva de disco en cada solicitud.
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
+from typing import Dict, List
 
 from django.conf import settings
 
@@ -17,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 # Caché en memoria: repo_dir -> instancia del almacén FAISS
 _faiss_store_cache: dict[str, object] = {}
+_faiss_cache_lock = threading.Lock()
 
 
 def retrieve_context(query: str, k: int = 5) -> List[Dict]:
@@ -57,12 +60,19 @@ def retrieve_context(query: str, k: int = 5) -> List[Dict]:
 
 
 def _get_faiss_store(store_path: str):
-    """Return a cached FAISS store or load it from disk."""
-    if store_path in _faiss_store_cache:
-        return _faiss_store_cache[store_path]
+    """Return a cached FAISS store or load it from disk (thread-safe)."""
+    with _faiss_cache_lock:
+        if store_path in _faiss_store_cache:
+            return _faiss_store_cache[store_path]
+    # Cargar fuera del lock para no bloquear otros hilos durante I/O
     store = _load_faiss_store(Path(store_path))
     if store is not None:
-        _faiss_store_cache[store_path] = store
+        with _faiss_cache_lock:
+            # Double-check: otro hilo pudo cargarlo mientras tanto
+            if store_path not in _faiss_store_cache:
+                _faiss_store_cache[store_path] = store
+            else:
+                store = _faiss_store_cache[store_path]
     return store
 
 
@@ -87,5 +97,6 @@ def _load_faiss_store(store_path: Path):
 
 def clear_faiss_cache():
     """Limpia el caché en memoria de los almacenes FAISS (útil después de re-indexar)."""
-    _faiss_store_cache.clear()
+    with _faiss_cache_lock:
+        _faiss_store_cache.clear()
     logger.info("FAISS store cache cleared")

@@ -9,26 +9,29 @@ Utiliza un caché singleton para que el modelo de embedding se cree solo una vez
 """
 
 import logging
+import threading
 
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
-_embeddings_cache = {}
+_embeddings_cache: dict = {}
+_embeddings_lock = threading.Lock()
 
 
 def get_embeddings():
     """Devuelve el proveedor de embeddings configurado (OpenAI, Gemini o local).
 
-    Utiliza un caché singleton para crear el modelo una sola vez.
+    Utiliza un caché singleton thread-safe para crear el modelo una sola vez.
     """
     provider = getattr(settings, 'EMBEDDINGS_PROVIDER', '').lower()
     model = getattr(settings, 'EMBEDDINGS_MODEL', '')
 
     cache_key = f"{provider}:{model}" if provider else model
 
-    if cache_key in _embeddings_cache:
-        return _embeddings_cache[cache_key]
+    with _embeddings_lock:
+        if cache_key in _embeddings_cache:
+            return _embeddings_cache[cache_key]
 
     if provider == 'openai':
         instance = _openai_embeddings(model)
@@ -46,7 +49,12 @@ def get_embeddings():
             logger.info("No API keys found, falling back to local embeddings")
             instance = _local_embeddings(model)
 
-    _embeddings_cache[cache_key] = instance
+    with _embeddings_lock:
+        # Double-check: otro hilo pudo crearlo mientras tanto
+        if cache_key not in _embeddings_cache:
+            _embeddings_cache[cache_key] = instance
+        else:
+            instance = _embeddings_cache[cache_key]
     return instance
 
 
