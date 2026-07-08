@@ -1,9 +1,12 @@
 """
 Detector de piscinas sobre imágenes aéreas con ONNX.
 
-Usa un modelo YOLOv8n exportado a ONNX (~6 MB) para detección de objetos
-y filtra las detecciones por color/forma para identificar piscinas.
-Corre con onnxruntime (sin PyTorch, sin ultralytics).
+Usa un modelo YOLOv11n fine-tuned para piscinas, exportado a ONNX (~5 MB).
+El modelo procede de https://github.com/yourkln/pool-detection y fue
+entrenado específicamente con imágenes aéreas de piscinas (1 clase).
+Corre con onnxruntime (sin PyTorch, sin ultralytics en producción).
+Si el modelo ONNX no está disponible, usa un fallback de segmentación
+por color con OpenCV.
 """
 import logging
 from pathlib import Path
@@ -82,7 +85,7 @@ class PoolDetector(BaseDetector):
         geojson = self._boxes_to_geojson(boxes, orig_w, orig_h, bbox, srs)
         return self._reproject_geojson(geojson, srs)
 
-    # ── Preprocesado / Postprocesado YOLOv8 ONNX ────────────────────
+    # ── Preprocesado / Postprocesado YOLO ONNX (v8/v11) ────────────
 
     def _preprocess(self, img: np.ndarray) -> Tuple[np.ndarray, float, Tuple[int, int]]:
         h, w = img.shape[:2]
@@ -264,7 +267,7 @@ class PoolDetector(BaseDetector):
                 "properties": {
                     "detector": self.name,
                     "label": "Piscina",
-                    "model": "YOLOv8n (ONNX)",
+                    "model": "YOLOv11n (ONNX)",
                     "confidence": round(box["confidence"], 3),
                 },
             })
