@@ -378,3 +378,157 @@ class RunStreamTest(TestCase):
         text_events = [e for e in events if e["type"] == "text_delta"]
         full_text = "".join(e["text"] for e in text_events)
         self.assertEqual(full_text, "Hola mundo")
+
+
+class AgentRunIntegrationTest(TestCase):
+    """Tests de integración para Agent.run() con respuestas LLM mockeadas."""
+
+    def _make_agent(self):
+        """Crea un Agent con todas las dependencias mockeadas."""
+        with patch("agent.agent.SkillRegistry") as MockRegistry, \
+             patch("agent.agent.get_llm_provider") as mock_llm, \
+             patch("agent.agent.get_provider") as mock_prov, \
+             patch("agent.agent.Agent._init_mcp") as mock_mcp:
+            mock_mcp.return_value = None
+            MockRegistry.return_value = MagicMock()
+            MockRegistry.return_value.get_system_prompt.return_value = ""
+            mock_llm.return_value = MagicMock()
+            agent = Agent()
+        return agent
+
+    @patch("agent.agent.retrieve_context", return_value=[])
+    @patch("agent.agent.get_langchain_tools", return_value=[])
+    def test_run_respuesta_texto(self, _tools, _rag):
+        """Agent.run() con respuesta de solo texto devuelve AgentResponse con texto."""
+        from agent.llm.providers import ChatResponse
+
+        agent = self._make_agent()
+        agent.provider.chat.return_value = ChatResponse(content="Madrid es la capital de España.")
+
+        result = agent.run("¿Qué es Madrid?", [])
+
+        self.assertEqual(result.text_content, "Madrid es la capital de España.")
+        self.assertEqual(result.tool_calls, [])
+
+    @patch("agent.agent.retrieve_context", return_value=[])
+    @patch("agent.agent.get_langchain_tools", return_value=[])
+    def test_run_con_tool_call_mapa(self, _tools, _rag):
+        """Agent.run() con tool_call del mapa devuelve AgentResponse con tool_calls."""
+        from agent.llm.providers import ChatResponse
+
+        agent = self._make_agent()
+        tc = [{"name": "zoomTo", "args": {"lat": 40.4, "lon": -3.7, "zoom": 14}, "id": "call_1"}]
+        agent.provider.chat.return_value = ChatResponse(
+            content="Moviendo el mapa a Madrid...",
+            tool_calls=tc,
+        )
+
+        result = agent.run("Llévame a Madrid", [])
+
+        self.assertEqual(len(result.tool_calls), 1)
+        self.assertEqual(result.tool_calls[0]["name"], "zoomTo")
+        self.assertEqual(result.tool_calls[0]["args"]["lat"], 40.4)
+
+    @patch("agent.agent.retrieve_context", return_value=[])
+    @patch("agent.agent.get_langchain_tools", return_value=[])
+    @patch("agent.agent.get_executor")
+    @patch("agent.agent.has_executor")
+    def test_run_con_server_tool_ejecuta_y_continua(self, mock_has_exec, mock_get_exec, _tools, _rag):
+        """Agent.run() con server tool ejecuta inline y continúa con segunda respuesta."""
+        from agent.llm.providers import ChatResponse
+
+        agent = self._make_agent()
+
+        # Primera llamada: LLM decide usar fetchWebPage (server tool)
+        # Segunda llamada: LLM responde con texto tras recibir resultado
+        mock_has_exec.side_effect = lambda n: n == "fetchWebPage"
+        mock_get_exec.return_value = lambda **kw: "Contenido de la web"
+
+        call_count = [0]
+        def chat_side_effect(messages, tools=None):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return ChatResponse(
+                    content="Descargando página...",
+                    tool_calls=[{"name": "fetchWebPage", "args": {"url": "http://example.com"}, "id": "tc1"}],
+                )
+            return ChatResponse(content="La página contiene información sobre mapas.")
+
+        agent.provider.chat.side_effect = chat_side_effect
+
+        result = agent.run("Descarga http://example.com", [])
+
+        self.assertEqual(result.text_content, "La página contiene información sobre mapas.")
+        self.assertEqual(call_count[0], 2)
+
+
+class AgentRunStreamIntegrationTest(TestCase):
+    """Tests de integración para Agent.run_stream() con respuestas LLM mockeadas."""
+
+    def _make_agent(self):
+        """Crea un Agent con todas las dependencias mockeadas."""
+        with patch("agent.agent.SkillRegistry") as MockRegistry, \
+             patch("agent.agent.get_llm_provider") as mock_llm, \
+             patch("agent.agent.Agent._init_mcp") as mock_mcp:
+            mock_mcp.return_value = None
+            MockRegistry.return_value = MagicMock()
+            MockRegistry.return_value.get_system_prompt.return_value = ""
+            mock_llm.return_value = MagicMock()
+            agent = Agent()
+        return agent
+
+    @patch("agent.agent.retrieve_context", return_value=[])
+    @patch("agent.agent.get_langchain_tools", return_value=[])
+    def test_stream_texto_emite_deltas_y_done(self, _tools, _rag):
+        """run_stream() emite text_delta para cada chunk y done al final."""
+        from agent.llm.providers import ChatResponse
+
+        agent = self._make_agent()
+        agent.provider.stream = MagicMock(return_value=iter([
+            ChatResponse(content="Respuesta "),
+            ChatResponse(content="completa"),
+        ]))
+
+        events = list(agent.run_stream("test", []))
+        types = [e["type"] for e in events]
+
+        self.assertIn("text_delta", types)
+        self.assertEqual(types[-1], "done")
+        text_events = [e for e in events if e["type"] == "text_delta"]
+        full_text = "".join(e["text"] for e in text_events)
+        self.assertEqual(full_text, "Respuesta completa")
+
+    @patch("agent.agent.retrieve_context", return_value=[])
+    @patch("agent.agent.get_langchain_tools", return_value=[])
+    @patch("agent.agent.get_executor")
+    @patch("agent.agent.has_executor")
+    def test_stream_con_server_tool_emite_texto_tras_ejecucion(self, mock_has_exec, mock_get_exec, _tools, _rag):
+        """run_stream() con server tool ejecuta inline y emite texto en segunda iteración."""
+        from agent.llm.providers import ChatResponse
+
+        agent = self._make_agent()
+
+        mock_has_exec.side_effect = lambda n: n == "fetchWebPage"
+        mock_get_exec.return_value = lambda **kw: "Contenido web"
+
+        call_count = [0]
+        def stream_side_effect(messages, tools=None):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # Primera iteración: tool call
+                yield ChatResponse(content="", tool_calls=[
+                    {"name": "fetchWebPage", "args": {"url": "http://example.com"}, "id": "tc1"}
+                ])
+            else:
+                # Segunda iteración: texto final
+                yield ChatResponse(content="Resultado procesado")
+
+        agent.provider.stream = MagicMock(side_effect=stream_side_effect)
+
+        events = list(agent.run_stream("test", []))
+        types = [e["type"] for e in events]
+
+        self.assertIn("text_delta", types)
+        self.assertEqual(types[-1], "done")
+        text_events = [e for e in events if e["type"] == "text_delta"]
+        self.assertTrue(any("Resultado procesado" in e["text"] for e in text_events))

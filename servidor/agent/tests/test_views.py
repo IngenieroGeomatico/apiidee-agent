@@ -557,3 +557,90 @@ class LazyCleanupTests(TestCase):
         _lazy_cleanup()
 
         self.assertTrue(Conversation.objects.filter(id=conv.id).exists())
+
+
+class ToolResultEndpointTests(TestCase):
+    """Tests para el endpoint POST tool-result/."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.conversation = Conversation.objects.create(title="Tool result test")
+        # Crear un mensaje previo del usuario y del asistente con tool_call
+        Message.objects.create(
+            conversation=self.conversation,
+            role=Message.Role.USER,
+            content=[{"type": "text", "text": "Llévame a Madrid"}],
+        )
+        Message.objects.create(
+            conversation=self.conversation,
+            role=Message.Role.ASSISTANT,
+            content=[{"type": "text", "text": "Moviendo el mapa..."}],
+            metadata={"tool_calls": [{"name": "geocodePlace", "args": {"q": "Madrid"}, "id": "call_1"}]},
+        )
+
+    def test_tool_result_con_geojson_url_devuelve_layer(self):
+        """POST tool-result con geojsonURL devuelve respuesta layer directamente."""
+        url = f"/api/conversations/{self.conversation.id}/tool-result/"
+        data = {
+            "tool_name": "geocodePlace",
+            "tool_call_id": "call_1",
+            "result": {"geojsonURL": "http://example.com/geo.json", "name": "Madrid"},
+            "success": True,
+        }
+        response = self.client.post(url, data, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        content = response.data["content"]
+        layer_blocks = [b for b in content if b.get("type") == "layer"]
+        self.assertEqual(len(layer_blocks), 1)
+        self.assertEqual(layer_blocks[0]["layer"]["url"], "http://example.com/geo.json")
+        self.assertEqual(layer_blocks[0]["layer"]["name"], "Madrid")
+
+    @patch("agent.views._make_agent")
+    def test_tool_result_normal_delega_al_agent(self, mock_make_agent):
+        """POST tool-result sin geojsonURL delega al Agent.process_tool_result."""
+        from agent.agent import AgentResponse
+
+        mock_agent = MagicMock()
+        mock_agent.process_tool_result.return_value = AgentResponse.text(
+            "El mapa se ha movido a Madrid correctamente."
+        )
+        mock_make_agent.return_value = mock_agent
+
+        url = f"/api/conversations/{self.conversation.id}/tool-result/"
+        data = {
+            "tool_name": "zoomTo",
+            "tool_call_id": "call_1",
+            "result": {"success": True},
+            "success": True,
+        }
+        response = self.client.post(url, data, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        mock_agent.process_tool_result.assert_called_once()
+        content = response.data["content"]
+        text_blocks = [b for b in content if b.get("type") == "text"]
+        self.assertTrue(any("Madrid" in b.get("text", "") for b in text_blocks))
+
+    @patch("agent.views._make_agent")
+    def test_tool_result_con_success_false(self, mock_make_agent):
+        """POST tool-result con success=False sigue funcionando correctamente."""
+        from agent.agent import AgentResponse
+
+        mock_agent = MagicMock()
+        mock_agent.process_tool_result.return_value = AgentResponse.text(
+            "La herramienta falló, pero puedo intentar otra cosa."
+        )
+        mock_make_agent.return_value = mock_agent
+
+        url = f"/api/conversations/{self.conversation.id}/tool-result/"
+        data = {
+            "tool_name": "zoomTo",
+            "tool_call_id": "call_1",
+            "result": {"error": "Permission denied"},
+            "success": False,
+        }
+        response = self.client.post(url, data, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        mock_agent.process_tool_result.assert_called_once()
