@@ -389,6 +389,7 @@ class ChatAgent {
     this.options.placeholder = this.options.placeholder || 'Pregunta sobre API-IDEE...';
     this.options.welcomeMessage = this.options.welcomeMessage || null;
     this.options.stream = this.options.stream !== undefined ? this.options.stream : false;
+    this.options.maxConversations = this.options.maxConversations || 10;
 
     // Estado
     this.map_ = null;
@@ -396,6 +397,7 @@ class ChatAgent {
     this.control_ = null;
     this.conversationId = null;
     this.providers = [];
+    this.conversationIds = [];
 
     // Referencias al DOM (cacheadas en _onActivate)
     this.messagesContainer = null;
@@ -406,6 +408,10 @@ class ChatAgent {
     this.modelSelect = null;
     this.settingsToggle = null;
     this.settingsPanel = null;
+    this.historyToggle = null;
+    this.historyPanel = null;
+    this.historyList = null;
+    this.newConversationBtn = null;
     this.settingsProv = null;
     this.settingsSave = null;
     this.connTest = null;
@@ -473,6 +479,200 @@ class ChatAgent {
   }
 
   /* ------------------------------------------------------------------
+     Historial de conversaciones
+     ------------------------------------------------------------------ */
+
+  /** Carga los IDs de conversacion desde localStorage. */
+  _loadConversationIds() {
+    try {
+      var raw = localStorage.getItem('chatagent_conversations');
+      if (raw) {
+        this.conversationIds = JSON.parse(raw);
+      }
+    } catch (e) {
+      this.conversationIds = [];
+    }
+    if (!Array.isArray(this.conversationIds)) {
+      this.conversationIds = [];
+    }
+  }
+
+  /** Guarda los IDs de conversacion en localStorage. */
+  _saveConversationIds() {
+    try {
+      localStorage.setItem('chatagent_conversations', JSON.stringify(this.conversationIds));
+    } catch (e) {
+      console.error('Error saving conversation IDs to localStorage:', e);
+    }
+  }
+
+  /** Añade un ID de conversacion, recorta el array al maximo y guarda.
+    @param {string} id ID de la nueva conversacion. */
+  _addConversationId(id) {
+    if (!id) return;
+    // Eliminar si ya existe para moverlo al principio
+    var index = this.conversationIds.indexOf(id);
+    if (index > -1) {
+      this.conversationIds.splice(index, 1);
+    }
+    // Añadir al principio
+    this.conversationIds.unshift(id);
+    // Recortar al tamaño maximo
+    if (this.conversationIds.length > this.options.maxConversations) {
+      this.conversationIds.length = this.options.maxConversations;
+    }
+    this._saveConversationIds();
+  }
+
+  /** Elimina un ID de conversacion y guarda.
+    @param {string} id ID de la conversacion a eliminar. */
+  _removeConversationId(id) {
+    this.conversationIds = this.conversationIds.filter(function(savedId) {
+      return savedId !== id;
+    });
+    this._saveConversationIds();
+  }
+
+  /** Alterna la visibilidad del panel de historial. */
+  _toggleHistory() {
+    if (!this.historyPanel) return;
+    var isOpen = this.historyPanel.classList.toggle('open');
+    if (isOpen) {
+      // Cerrar panel de ajustes si esta abierto
+      if (this.settingsPanel && this.settingsPanel.classList.contains('open')) {
+        this.settingsPanel.classList.remove('open');
+      }
+      this._loadHistory();
+    }
+  }
+
+  /** Obtiene la configuracion de conversaciones del servidor. */
+  async _fetchConversationConfig() {
+    try {
+      var res = await fetch(this.options.backendUrl + '/conversation-config/');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var config = await res.json();
+      this.options.maxConversations = config.max_per_client || this.options.maxConversations;
+    } catch (error) {
+      console.error('Error fetching conversation config:', error);
+    }
+  }
+
+  /** Carga la lista de conversaciones desde el backend y la renderiza. */
+  async _loadHistory() {
+    if (!this.historyList || this.conversationIds.length === 0) {
+        if (this.historyList) this.historyList.innerHTML = '<div class="chatagent-history-empty">No hay conversaciones guardadas</div>';
+        return;
+    }
+
+    this.historyList.innerHTML = '<div class="chatagent-history-loading">Cargando...</div>';
+
+    try {
+      var res = await fetch(this.options.backendUrl + '/conversations/by-ids/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: this.conversationIds }),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var conversations = await res.json();
+
+      // Ordenar conversaciones segun el orden de this.conversationIds
+      var sortedConversations = this.conversationIds.map(function(id) {
+        return conversations.find(function(c) { return c.id === id; });
+      }).filter(Boolean);
+
+      this._renderHistory(sortedConversations);
+    } catch (error) {
+      console.error('Error loading history:', error);
+      if (this.historyList) this.historyList.innerHTML = '<div class="chatagent-history-empty">Error al cargar el historial</div>';
+    }
+  }
+
+  /** Renderiza la lista de conversaciones en el panel de historial.
+    @param {Array<Object>} conversations Lista de objetos de conversacion. */
+  _renderHistory(conversations) {
+    if (!this.historyList) return;
+    if (conversations.length === 0) {
+        this.historyList.innerHTML = '<div class="chatagent-history-empty">No hay conversaciones guardadas</div>';
+        return;
+    }
+
+    var self = this;
+    var html = '';
+    conversations.forEach(function(conv) {
+        var title = conv.title ? conv.title.substring(0, 40) : 'Conversación sin título';
+        var date = new Date(conv.created_at);
+        // Idealmente usariamos una libreria para fechas relativas, pero para no añadir dependencias, usamos una simple.
+        var relativeDate = self._getRelativeDate(date);
+
+        html += '<div class="chatagent-history-item" data-id="' + conv.id + '">'
+             +  '<div class="chatagent-history-item-title">' + chatagentEscapeHtml(title) + '</div>'
+             +  '<div class="chatagent-history-item-date">' + relativeDate + '</div>'
+             + '</div>';
+    });
+    this.historyList.innerHTML = html;
+
+    // Añadir listeners a los items
+    this.historyList.querySelectorAll('.chatagent-history-item').forEach(function(item) {
+        item.addEventListener('click', function() {
+            var id = item.getAttribute('data-id');
+            self._switchConversation(id);
+        });
+    });
+  }
+    _getRelativeDate(date) {
+        const now = new Date();
+        const diff = now.getTime() - date.getTime();
+        const seconds = Math.floor(diff / 1000);
+        const minutes = Math.floor(seconds / 60);
+        const hours = Math.floor(minutes / 60);
+        const days = Math.floor(hours / 24);
+
+        if (days > 0) return `Hace ${days} día(s)`;
+        if (hours > 0) return `Hace ${hours} hora(s)`;
+        if (minutes > 0) return `Hace ${minutes} minuto(s)`;
+        return 'Ahora mismo';
+    }
+
+
+  /** Cambia a una conversacion existente.
+    @param {string} id ID de la conversacion a cargar. */
+  async _switchConversation(id) {
+    if (!id || id === this.conversationId) return;
+
+    this.conversationId = id;
+    if (this.messagesContainer) this.messagesContainer.innerHTML = '';
+    this._showLoading(true);
+
+    try {
+        var res = await fetch(this.options.backendUrl + '/conversations/' + id + '/messages/');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        var messages = await res.json();
+
+        messages.forEach(function(msg) {
+            this._appendMessage(msg.role, msg.content, msg.metadata ? msg.metadata.sources : null);
+        }, this);
+
+    } catch (error) {
+        console.error('Error loading conversation messages:', error);
+        this._appendMessage('system', 'Error al cargar los mensajes de la conversación.');
+    } finally {
+        this._showLoading(false);
+        if (this.historyPanel) this.historyPanel.classList.remove('open');
+    }
+  }
+
+  /** Inicia una nueva conversacion. */
+  _startNewConversation() {
+    this.conversationId = null;
+    if (this.messagesContainer) this.messagesContainer.innerHTML = '';
+    var welcome = this.options.welcomeMessage
+        || '<p>Soy el asistente de API-IDEE. Puedo ayudarte con:</p><ul><li>Usar el visor de mapas</li><li>Capas WMS, WMTS, WFS, GeoJSON, KML...</li><li>Desarrollar plugins</li><li>Navegar y buscar en el mapa</li></ul>';
+    this._appendMessage('assistant', welcome);
+    if (this.historyPanel) this.historyPanel.classList.remove('open');
+  }
+
+  /* ------------------------------------------------------------------
      Ciclo de vida del plugin
      ------------------------------------------------------------------ */
 
@@ -503,6 +703,7 @@ class ChatAgent {
       + '<div aria-label="asistente IA" role="menuitem" id="div-contenedor-chatagent" class="m-control m-container m-chatagent-container">'
       +   '<header role="heading" tabindex="0" id="m-chatagent-title" class="m-chatagent-header">'
       +     '<span class="chatagent-header-title">Asistente API-IDEE</span>'
+      +     '<button id="chatagent-history-toggle" class="chatagent-history-toggle" title="Historial">&#128340;</button>'
       +     '<button id="chatagent-settings-toggle" class="chatagent-settings-toggle" title="Configuración">&#9881;</button>'
       +   '</header>'
       +   '<section id="m-chatagent-body" class="m-chatagent-body">'
@@ -533,6 +734,10 @@ class ChatAgent {
       +         '<button id="chatagent-connection-test" class="chatagent-btn-test">Probar</button>'
       +         '<button id="chatagent-settings-save" class="chatagent-settings-save" disabled>Guardar</button>'
       +       '</div>'
+      +     '</div>'
+      +     '<div id="chatagent-history-panel" class="chatagent-history-panel">'
+      +       '<button id="chatagent-new-conversation" class="chatagent-btn-new-conversation">Nueva conversación</button>'
+      +       '<div id="chatagent-history-list" class="chatagent-history-list"></div>'
       +     '</div>'
       +     '<div id="chatagent-messages" class="chatagent-messages"></div>'
       +     '<div class="chatagent-loading" id="chatagent-loading">'
@@ -588,6 +793,10 @@ class ChatAgent {
     this.modelSelect = document.querySelector('#chatagent-model-select');
     this.settingsToggle = document.querySelector('#chatagent-settings-toggle');
     this.settingsPanel = document.querySelector('#chatagent-settings-panel');
+    this.historyToggle = document.querySelector('#chatagent-history-toggle');
+    this.historyPanel = document.querySelector('#chatagent-history-panel');
+    this.historyList = document.querySelector('#chatagent-history-list');
+    this.newConversationBtn = document.querySelector('#chatagent-new-conversation');
     this.settingsProv = document.querySelector('#chatagent-settings-provider');
     this.settingsSave = document.querySelector('#chatagent-settings-save');
     this.connTest = document.querySelector('#chatagent-connection-test');
@@ -641,6 +850,20 @@ class ChatAgent {
       });
     }
 
+    // Alternar panel de historial
+    if (this.historyToggle) {
+      this.historyToggle.addEventListener('click', function() {
+        self._toggleHistory();
+      });
+    }
+
+    // Boton de nueva conversacion
+    if (this.newConversationBtn) {
+        this.newConversationBtn.addEventListener('click', function() {
+            self._startNewConversation();
+        });
+    }
+
     // Probar conexión
     if (this.connTest) {
       this.connTest.addEventListener('click', function() {
@@ -682,6 +905,10 @@ class ChatAgent {
       self.sendBtn.disabled = false;
       self.inputElement.disabled = false;
     });
+
+    // Cargar configuracion e historial
+    this._fetchConversationConfig();
+    this._loadConversationIds();
   }
 
   /** Elimina los listeners de eventos al desactivarse el control. */
@@ -1090,6 +1317,7 @@ class ChatAgent {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
       this.conversationId = data.id;
+      this._addConversationId(this.conversationId);
     } catch (error) {
       console.error('Error creating conversation:', error);
       this._appendMessage('system', 'Error al iniciar la conversacion.');
