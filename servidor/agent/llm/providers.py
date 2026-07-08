@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Generator, Optional
 
 from django.conf import settings
 
@@ -24,7 +24,7 @@ class BaseLLMProvider:
 
     Las subclases solo necesitan inicializar ``self.llm`` con un objeto
     LangChain compatible (ChatOpenAI, ChatGoogleGenerativeAI, etc.).
-    El método ``chat()`` es común a todos los proveedores.
+    Los métodos ``chat()`` y ``stream()`` son comunes a todos los proveedores.
     """
 
     llm = None  # Las subclases lo inicializan en __init__
@@ -47,6 +47,74 @@ class BaseLLMProvider:
             return ChatResponse(content=response.content or "", tool_calls=tool_calls)
 
         return ChatResponse(content=response.content)
+
+    def stream(self, messages: list[dict],
+               tools: Optional[list] = None) -> Generator[ChatResponse, None, None]:
+        """Envía mensajes al LLM y hace yield de ChatResponse incrementales.
+
+        Cada chunk contiene solo el delta de texto (``content``).  Si el LLM
+        decide invocar tools, el último chunk contendrá ``tool_calls`` con
+        la lista completa (los tool calls no se streamean parcialmente).
+
+        Yields:
+            ChatResponse con ``content`` incremental y/o ``tool_calls``.
+        """
+        lc_messages = [self._convert_message(m) for m in messages]
+
+        llm = self.llm
+        if tools:
+            llm = self.llm.bind_tools(tools)
+
+        accumulated_tool_calls = []
+        for chunk in llm.stream(lc_messages):
+            # Acumular tool calls si llegan en chunks
+            if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
+                for tc_chunk in chunk.tool_call_chunks:
+                    self._accumulate_tool_call(accumulated_tool_calls, tc_chunk)
+
+            # Emitir delta de texto si hay contenido
+            text = chunk.content if isinstance(chunk.content, str) else ""
+            if text:
+                yield ChatResponse(content=text)
+
+        # Emitir tool calls acumulados al final (si los hay)
+        if accumulated_tool_calls:
+            self._finalize_tool_call_args(accumulated_tool_calls)
+            finalized = [
+                {"name": tc["name"], "args": tc["args"], "id": tc.get("id", "")}
+                for tc in accumulated_tool_calls
+                if tc.get("name")
+            ]
+            if finalized:
+                yield ChatResponse(content="", tool_calls=finalized)
+
+    @staticmethod
+    def _accumulate_tool_call(accumulated: list, tc_chunk: dict):
+        """Acumula fragmentos de tool_call en una lista de tool calls completos."""
+        idx = tc_chunk.get("index", 0)
+        # Extender lista si es necesario
+        while len(accumulated) <= idx:
+            accumulated.append({"name": "", "args": "", "id": ""})
+        tc = accumulated[idx]
+        if tc_chunk.get("name"):
+            tc["name"] = tc_chunk["name"]
+        if tc_chunk.get("id"):
+            tc["id"] = tc_chunk["id"]
+        # Los args llegan como fragmentos de JSON string
+        args_fragment = tc_chunk.get("args", "")
+        if args_fragment:
+            tc["args"] = (tc.get("args", "") or "") + args_fragment
+
+    @staticmethod
+    def _finalize_tool_call_args(accumulated: list):
+        """Parsea los args acumulados (JSON string) a dict."""
+        import json
+        for tc in accumulated:
+            if isinstance(tc.get("args"), str) and tc["args"]:
+                try:
+                    tc["args"] = json.loads(tc["args"])
+                except (json.JSONDecodeError, TypeError):
+                    tc["args"] = {}
 
     @staticmethod
     def _convert_message(msg: dict):

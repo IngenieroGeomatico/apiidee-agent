@@ -14,7 +14,7 @@ import threading
 from collections import OrderedDict
 
 from django.conf import settings
-from django.http import JsonResponse
+from django.http import JsonResponse, StreamingHttpResponse
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
@@ -122,7 +122,12 @@ class ConversationViewSet(
 
     @action(detail=True, methods=['post'], url_path='chat')
     def chat(self, request, pk=None):
-        """Envía un mensaje y obtén una respuesta de la IA."""
+        """Envía un mensaje y obtén una respuesta de la IA.
+
+        Si ``stream=true`` en el body, devuelve un ``StreamingHttpResponse``
+        con eventos SSE (Server-Sent Events).  Si no, devuelve JSON como
+        hasta ahora (sin breaking changes).
+        """
         conversation = self.get_object()
 
         input_serializer = ChatInputSerializer(data=request.data)
@@ -132,6 +137,7 @@ class ConversationViewSet(
         provider_name = input_serializer.validated_data.get('provider')
         model = input_serializer.validated_data.get('model')
         api_key = input_serializer.validated_data.get('api_key')
+        use_stream = input_serializer.validated_data.get('stream', False)
 
         # Persistir mensaje del usuario
         Message.objects.create(
@@ -143,9 +149,14 @@ class ConversationViewSet(
             conversation.title = user_content[:100]
             conversation.save(update_fields=['title'])
 
-        # Delegar al Agent
         history = _build_history(conversation)
         agent = _make_agent(provider_name, model, api_key)
+
+        if use_stream:
+            return _stream_response(conversation, agent, user_content,
+                                    history, map_state)
+
+        # Respuesta clásica (sin streaming)
         result = agent.run(user_content, history, map_state=map_state)
 
         extra = {}
@@ -199,6 +210,63 @@ class ConversationViewSet(
         result = agent.process_tool_result(tool_name, result_data, success, history)
 
         return _assistant_response(conversation, result)
+
+
+def _stream_response(conversation, agent, user_content, history, map_state):
+    """Devuelve un StreamingHttpResponse con eventos SSE.
+
+    Tipos de evento:
+      - ``text_delta``  — fragmento incremental de texto
+      - ``tool_call``   — tool calls del mapa para el frontend
+      - ``sources``     — fuentes RAG consultadas
+      - ``layer``       — capa GeoJSON (detecciones ML)
+      - ``done``        — fin del stream
+
+    Al terminar, persiste el mensaje completo del asistente en la BD.
+    """
+
+    def event_stream():
+        accumulated_text = ""
+        accumulated_content = []
+
+        for event in agent.run_stream(user_content, history, map_state=map_state):
+            event_type = event.get("type", "")
+            data = json.dumps(event, ensure_ascii=False)
+            yield f"event: {event_type}\ndata: {data}\n\n"
+
+            if event_type == "text_delta":
+                accumulated_text += event.get("text", "")
+            elif event_type == "tool_call":
+                accumulated_content.append({
+                    "type": "tool_call",
+                    "toolCalls": event.get("toolCalls", []),
+                })
+            elif event_type == "layer":
+                accumulated_content.append({
+                    "type": "layer",
+                    "layer": event.get("layer", {}),
+                })
+
+        content_blocks = []
+        if accumulated_text:
+            content_blocks.append({"type": "text", "text": accumulated_text})
+        content_blocks.extend(accumulated_content)
+        if not content_blocks:
+            content_blocks.append({"type": "text", "text": ""})
+
+        Message.objects.create(
+            conversation=conversation,
+            role=Message.Role.ASSISTANT,
+            content=content_blocks,
+        )
+
+    response = StreamingHttpResponse(
+        event_stream(),
+        content_type="text/event-stream",
+    )
+    response["Cache-Control"] = "no-cache"
+    response["X-Accel-Buffering"] = "no"
+    return response
 
 
 _MAX_HISTORY_MESSAGES = 50
