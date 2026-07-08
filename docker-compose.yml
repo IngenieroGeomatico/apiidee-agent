@@ -1,0 +1,31 @@
+services:
+  servidor:
+    build: ./servidor
+    env_file: ./servidor/.env
+    environment:
+      - ALLOWED_HOSTS=localhost,127.0.0.1,servidor
+      - ALLOWED_ORIGINS=http://localhost:8080,http://localhost:3000
+    volumes:
+      - db_data:/app/db.sqlite3
+      - ml_models:/app/ml_models
+      - vectorstore_data:/app/vectorstore_data
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  visualizador:
+    image: nginx:alpine
+    volumes:
+      - ./index.html:/usr/share/nginx/html/index.html:ro
+      - ./plugin:/usr/share/nginx/html/plugin:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      - servidor
+    restart: unless-stopped
+
+volumes:
+  db_data:
+  ml_models:
+  vectorstore_data:
