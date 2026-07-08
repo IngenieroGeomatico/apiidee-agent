@@ -2,9 +2,27 @@
 
 Este directorio contiene los pesos de los modelos ML utilizados por los detectores.
 
-Cada detector espera un archivo de modelo concreto (generalmente en formato ONNX)
-dentro de este directorio. Cuando el archivo no existe, el detector entra en **modo demo**
-generando detecciones ficticias para poder probar el pipeline sin el modelo real.
+Cada detector espera un archivo de modelo concreto en formato ONNX dentro de este
+directorio. Cuando el archivo no existe, el detector entra en **modo reducido**
+usando segmentación por color con OpenCV.
+
+## Modelo actual
+
+| Fichero | Modelo | Origen | Tamaño ONNX | Clases |
+|---------|--------|--------|-------------|--------|
+| `pool_detector.onnx` | YOLOv11n fine-tuned | [yourkln/pool-detection](https://github.com/yourkln/pool-detection) | ~5 MB | 1 (piscina) |
+
+### Descarga automática
+
+Al arrancar el servidor, `download.py` comprueba si `pool_detector.onnx` existe.
+Si no, descarga el `.pt` original (~5 MB), lo convierte a ONNX con `ultralytics`
+(se instala automáticamente si no está) y borra el `.pt` intermedio.
+
+```bash
+# Descarga manual
+cd servidor
+python -m ml_models.download
+```
 
 ---
 
