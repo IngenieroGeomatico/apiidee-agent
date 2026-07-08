@@ -274,14 +274,54 @@ EMBEDDINGS (modelo)          FAISS (indice)
 
 ## Requisitos
 
-- Python 3.11+
-- Git
 - Una API key de un proveedor LLM:
   - [Google Gemini](https://aistudio.google.com/app/apikey) (gratuita)
   - [OpenAI](https://platform.openai.com/api-keys)
   - Cualquier proveedor compatible con API OpenAI (Groq, Cerebras, OpenRouter, etc.)
 
-## Instalacion
+### Con Docker (recomendado)
+
+- [Docker](https://docs.docker.com/get-docker/) y [Docker Compose](https://docs.docker.com/compose/install/)
+
+### Sin Docker
+
+- Python 3.11+
+- Git
+
+## Instalacion con Docker
+
+```bash
+# 1. Clonar
+git clone https://github.com/IngenieroGeomatico/apiidee-agent.git
+cd apiidee-agent
+
+# 2. Configurar
+cp servidor/.env.example servidor/.env
+# Editar servidor/.env con tu API key
+
+# 3. Arrancar
+docker compose up
+
+# 4. Abrir http://localhost:8080
+```
+
+Eso es todo. El servidor Django (gunicorn) arranca en el puerto 8000 y el visualizador (nginx) en el 8080. Los modelos ML se descargan automaticamente en el primer arranque.
+
+Para reconstruir tras cambios en el codigo:
+
+```bash
+docker compose up --build
+```
+
+### Volumenes persistentes
+
+| Volumen | Contenido | Proposito |
+|---------|-----------|-----------|
+| `db_data` | `db.sqlite3` | Base de datos de conversaciones |
+| `ml_models` | `pool_detector.onnx` | Pesos del modelo ML (se descargan una vez) |
+| `vectorstore_data` | Indices FAISS | Conocimiento indexado para RAG |
+
+## Instalacion manual (sin Docker)
 
 ### 1. Clonar el repositorio
 
