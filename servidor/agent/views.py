@@ -264,11 +264,14 @@ def _lazy_cleanup():
             return
         _last_cleanup_time = now
 
-    ttl_hours = getattr(settings, "CONVERSATION_TTL_HOURS", 24)
-    cutoff = timezone.now() - timedelta(hours=ttl_hours)
-    deleted, _ = Conversation.objects.filter(updated_at__lt=cutoff).delete()
-    if deleted:
-        logger.info("Lazy cleanup: eliminadas %d conversaciones expiradas (TTL=%dh)", deleted, ttl_hours)
+    try:
+        ttl_hours = getattr(settings, "CONVERSATION_TTL_HOURS", 24)
+        cutoff = timezone.now() - timedelta(hours=ttl_hours)
+        deleted, _ = Conversation.objects.filter(updated_at__lt=cutoff).delete()
+        if deleted:
+            logger.info("Lazy cleanup: eliminadas %d conversaciones expiradas (TTL=%dh)", deleted, ttl_hours)
+    except Exception as exc:
+        logger.debug("Lazy cleanup omitido: %s", exc)
 
 
 @api_view(["GET"])
