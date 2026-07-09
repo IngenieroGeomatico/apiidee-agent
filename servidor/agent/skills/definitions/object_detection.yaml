@@ -3,23 +3,30 @@ description: Detect objects in aerial/satellite imagery using local ML models
 tools:
   - listDetectors
   - detectObjects
-  - getMapExtent
   - addLayer
 prompt: |
   Cuando el usuario pida detectar objetos en el mapa (piscinas, edificios, etc.):
 
   1. **Listar detectores**: Usa `listDetectors()` para ver qué modelos ML hay disponibles.
 
-  2. **Obtener la zona**: Si el usuario no especifica una zona concreta, usa `getMapExtent()` para obtener el bbox de la vista actual del mapa. El `srs` devuelto por `getMapExtent()` indica el sistema de referencia del bbox. Pásalo tal cual a `detectObjects`.
+  2. **Obtener la zona**: Usa el `extent` del `Current map state` que aparece al final del system prompt.
+     El map state incluye `extent: {minX, minY, maxX, maxY}` y `srs`.
+     **SIEMPRE** usa esos valores directamente como `bbox` y `srs` en `detectObjects`.
+     **NUNCA** inventes coordenadas ni asumas EPSG:3857. Usa exactamente lo que dice el map state.
 
-  3. **Ejecutar detección**: Usa `detectObjects(detector="<nombre>", bbox={minX, minY, maxX, maxY}, srs="<srs>")` con el detector apropiado. **El SRS debe ser el mismo que devuelve `getMapExtent()`**, no asumas EPSG:3857.
+  3. **Ejecutar detección**: Usa `detectObjects(detector="<nombre>", bbox={minX, minY, maxX, maxY}, srs="<srs>")`.
+     - `bbox`: copia exacta del `extent` del map state.
+     - `srs`: copia exacta del `srs` del map state.
 
-  4. **Mostrar resultados**: El resultado se mostrará automáticamente como una capa en el mapa. Solo informa al usuario de cuántos objetos se encontraron y con qué método (leyendo `properties.model` de las detecciones). **No llames a addLayer**, el sistema se encarga de añadir la capa automáticamente.
+  4. **Mostrar resultados**: El resultado se mostrará automáticamente como una capa en el mapa.
+     Solo informa al usuario de cuántos objetos se encontraron.
+     **No llames a addLayer**, el sistema se encarga de añadir la capa automáticamente.
 
-  5. **Fuente de imagen**: Por defecto se usa la ortofoto PNOA del IGN. Si el usuario quiere usar otro WMS, pásalo como `wms_url` y `wms_layer`.
+  5. **Fuente de imagen**: Por defecto se usa la ortofoto PNOA del IGN.
 
   Flujo típico:
   - Usuario: "Detecta piscinas en la zona del mapa"
-  - Agente: getMapExtent() → detectObjects(detector="pool_detector", bbox=..., srs="<srs_del_mapa>") → "He encontrado N piscinas en la zona mediante <modelo>"
+  - Agente: lee extent del map state → detectObjects(detector="pool_detector", bbox=<extent_del_map_state>, srs=<srs_del_map_state>)
+  - Agente: "He encontrado N piscinas en la zona"
 
   Si no hay detectores disponibles o el detector pedido no existe, informa al usuario.
