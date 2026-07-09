@@ -4,15 +4,15 @@ Agente IA para el visualizador de mapas [API-IDEE](https://github.com/Desarrollo
 
 ---
 
-> **Prompt:** <!-- Escribe aquí el prompt usado para este resultado -->
+> **Prompt:** Hola buenas, carga en el mapa la capa Mapa Base de España – IGNBaseGris
 
 ![Mapa base gris](img/mapaBaseGris.png)
 
-> **Prompt:** <!-- Escribe aquí el prompt usado para este resultado -->
+> **Prompt:** Hola buenas, dame el municipio de Madrid
 
 ![Municipio Madrid](img/municipioMadrid.png)
 
-> **Prompt:** <!-- Escribe aquí el prompt usado para este resultado -->
+> **Prompt:** Detecta las piscinas de la vista
 
 ![Piscinas](img/piscinas.png)
 
