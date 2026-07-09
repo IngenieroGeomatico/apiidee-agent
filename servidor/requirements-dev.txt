@@ -1,0 +1,16 @@
+# Dependencias solo para desarrollo (no necesarias en produccion).
+#
+# Instalar:
+#   pip install -r requirements-dev.txt
+#   pre-commit install
+#
+# Tras `pre-commit install`, ruff se ejecuta automaticamente en cada commit.
+# Las reglas viven en ruff.toml (raiz del repo).
+
+-r requirements.txt
+
+# Linter + formateador (config en ruff.toml)
+ruff>=0.9
+
+# Motor de git hooks (config en .pre-commit-config.yaml)
+pre-commit>=4.0
