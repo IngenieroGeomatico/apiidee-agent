@@ -75,7 +75,20 @@ def fetch_wms_image(
 
     req = Request(url, headers={"User-Agent": "APIIDEEAgent/1.0"})
     with urlopen(req, timeout=30) as resp:
+        content_type = resp.headers.get("Content-Type", "")
         data = resp.read()
+
+    # El WMS puede devolver XML de error en vez de imagen
+    if "image" not in content_type:
+        body_preview = data[:500].decode("utf-8", errors="ignore")
+        logger.error(
+            "WMS no devolvió imagen (Content-Type: %s). Respuesta: %s",
+            content_type, body_preview,
+        )
+        raise RuntimeError(
+            f"El servicio WMS devolvió {content_type} en vez de imagen. "
+            f"Puede que el bbox o el SRS no sean válidos."
+        )
 
     image = Image.open(io.BytesIO(data)).convert("RGB")
     logger.info("Imagen descargada: %dx%d px", image.width, image.height)
@@ -113,6 +126,9 @@ def run_detection(
         un JSON de error si algo falla.
     """
     from .registry import get_detector, list_detectors
+
+    logger.info("run_detection: detector=%s, bbox=%s, srs=%s, wms=%s, size=%dx%d",
+                detector_name, bbox, srs, wms_url or "PNOA", image_width, image_height)
 
     # 1. Buscar detector
     det = get_detector(detector_name)
