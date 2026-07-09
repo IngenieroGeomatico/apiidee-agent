@@ -1468,11 +1468,21 @@ class ChatAgent {
     if (!this.map_) return null;
     try {
       var center = this.map_.getCenter();
-      return {
+      var bbox = this.map_.getBbox();
+      var state = {
         center: { lat: center.y, lon: center.x },
         zoom: this.map_.getZoom(),
         srs: this.map_.getProjection().code,
       };
+      if (bbox) {
+        state.extent = {
+          minX: bbox.x.min,
+          minY: bbox.y.min,
+          maxX: bbox.x.max,
+          maxY: bbox.y.max,
+        };
+      }
+      return state;
     } catch (e) {
       return null;
     }
