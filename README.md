@@ -2,6 +2,22 @@
 
 Agente IA para el visualizador de mapas [API-IDEE](https://github.com/Desarrollos-IDEE/API-IDEE). Combina un servidor Django con RAG (Retrieval-Augmented Generation) y un plugin nativo del visualizador que permite interactuar con el mapa mediante chat.
 
+---
+
+> **Prompt:** <!-- Escribe aquí el prompt usado para este resultado -->
+
+![Mapa base gris](img/mapaBaseGris.png)
+
+> **Prompt:** <!-- Escribe aquí el prompt usado para este resultado -->
+
+![Municipio Madrid](img/municipioMadrid.png)
+
+> **Prompt:** <!-- Escribe aquí el prompt usado para este resultado -->
+
+![Piscinas](img/piscinas.png)
+
+---
+
 ## Arquitectura
 
 ```
