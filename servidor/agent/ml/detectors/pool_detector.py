@@ -165,27 +165,28 @@ class PoolDetector(BaseDetector):
     @staticmethod
     def _detect_pool_contours(roi: np.ndarray, min_area: int = 200,
                               max_area: int = 30000) -> List[np.ndarray]:
-        """Detecta contornos de piscinas en un ROI usando el pipeline de yourkln.
+        """Detecta contornos de piscinas en un ROI.
 
         Pipeline:
           1. Edge-preserving filter (suaviza ruido, conserva bordes)
-          2. Segmentación HSV azul/turquesa (H:80-120, S:60-255, V:80-255)
-          3. Morphology: opening 3x3 ×2 + closing 3x3 ×3
-          4. Contornos filtrados por área + suavizado fino (epsilon 0.001)
+          2. Segmentación HSV azul/turquesa (rango amplio para sombras y reflejos)
+          3. Morphology: opening 3x3 ×2 (eliminar ruido) + closing 3x3 ×5 (cerrar huecos)
+          4. Contornos filtrados por área + suavizado moderado (epsilon 0.01)
 
-        Ref: https://github.com/yourkln/pool-detection
+        Ref: https://github.com/yourkln/pool-detection (adaptado)
         """
         import cv2
         filtered = cv2.edgePreservingFilter(roi, flags=1, sigma_s=60, sigma_r=0.4)
         hsv = cv2.cvtColor(filtered, cv2.COLOR_RGB2HSV)
 
-        lower_blue = np.array([80, 60, 80])
-        upper_blue = np.array([120, 255, 255])
+        # Rango HSV amplio para capturar sombras, reflejos y variaciones de azul
+        lower_blue = np.array([75, 40, 50])
+        upper_blue = np.array([130, 255, 255])
         mask = cv2.inRange(hsv, lower_blue, upper_blue)
 
         kernel = np.ones((3, 3), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=2)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=3)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=5)
 
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
@@ -196,7 +197,7 @@ class PoolDetector(BaseDetector):
                 peri = cv2.arcLength(cnt, True)
                 if peri == 0:
                     continue
-                epsilon = 0.001 * peri
+                epsilon = 0.01 * peri
                 smoothed = cv2.approxPolyDP(cnt, epsilon, True)
                 result.append(smoothed)
         return result
