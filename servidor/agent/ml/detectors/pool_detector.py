@@ -179,14 +179,14 @@ class PoolDetector(BaseDetector):
         filtered = cv2.edgePreservingFilter(roi, flags=1, sigma_s=60, sigma_r=0.4)
         hsv = cv2.cvtColor(filtered, cv2.COLOR_RGB2HSV)
 
-        # Rango HSV amplio para capturar sombras, reflejos y variaciones de azul
-        lower_blue = np.array([75, 40, 50])
-        upper_blue = np.array([130, 255, 255])
+        # Rango HSV equilibrado: captura variaciones de azul sin coger verde/gris
+        lower_blue = np.array([78, 50, 70])
+        upper_blue = np.array([125, 255, 255])
         mask = cv2.inRange(hsv, lower_blue, upper_blue)
 
         kernel = np.ones((3, 3), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=2)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=5)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=4)
 
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
@@ -197,7 +197,7 @@ class PoolDetector(BaseDetector):
                 peri = cv2.arcLength(cnt, True)
                 if peri == 0:
                     continue
-                epsilon = 0.01 * peri
+                epsilon = 0.005 * peri
                 smoothed = cv2.approxPolyDP(cnt, epsilon, True)
                 result.append(smoothed)
         return result
