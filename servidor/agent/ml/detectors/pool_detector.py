@@ -160,84 +160,74 @@ class PoolDetector(BaseDetector):
         union = area_a + area_b - inter
         return inter / union if union > 0 else 0
 
-    # ── Fallback: segmentación por color (OpenCV) ───────────────────
+    # ── Segmentación por color (pipeline yourkln/pool-detection) ────
 
-    def _segment_pools_opencv(self, image: Any, bbox: Dict, srs: str) -> Dict:
+    @staticmethod
+    def _detect_pool_contours(roi: np.ndarray, min_area: int = 200,
+                              max_area: int = 30000) -> List[np.ndarray]:
+        """Detecta contornos de piscinas en un ROI usando el pipeline de yourkln.
+
+        Pipeline:
+          1. Edge-preserving filter (suaviza ruido, conserva bordes)
+          2. Segmentación HSV azul/turquesa (H:80-120, S:60-255, V:80-255)
+          3. Morphology: opening 3x3 ×2 + closing 3x3 ×3
+          4. Contornos filtrados por área + suavizado fino (epsilon 0.001)
+
+        Ref: https://github.com/yourkln/pool-detection
+        """
         import cv2
-        img = np.array(image.convert("RGB"))
-        hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+        filtered = cv2.edgePreservingFilter(roi, flags=1, sigma_s=60, sigma_r=0.4)
+        hsv = cv2.cvtColor(filtered, cv2.COLOR_RGB2HSV)
 
-        lower_blue = np.array([85, 40, 40])
-        upper_blue = np.array([130, 255, 255])
+        lower_blue = np.array([80, 60, 80])
+        upper_blue = np.array([120, 255, 255])
         mask = cv2.inRange(hsv, lower_blue, upper_blue)
 
-        kernel = np.ones((5, 5), np.uint8)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        kernel = np.ones((3, 3), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=2)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=3)
 
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+
+        result = []
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if min_area < area < max_area:
+                peri = cv2.arcLength(cnt, True)
+                if peri == 0:
+                    continue
+                epsilon = 0.001 * peri
+                smoothed = cv2.approxPolyDP(cnt, epsilon, True)
+                result.append(smoothed)
+        return result
+
+    def _segment_pools_opencv(self, image: Any, bbox: Dict, srs: str) -> Dict:
+        """Fallback sin modelo ONNX: segmenta piscinas por color en la imagen completa."""
+        img = np.array(image.convert("RGB"))
+        img_h, img_w = img.shape[:2]
+
+        import cv2
+        contours = self._detect_pool_contours(img)
         features = []
-        img_area = img.shape[0] * img.shape[1]
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if area < img_area * 0.004 or area > img_area * 0.4:
-                continue
-
             peri = cv2.arcLength(cnt, True)
-            if peri == 0:
-                continue
+            confidence = min(0.90, round(area / (img_h * img_w * 0.05), 3))
 
-            x, y, w, h = cv2.boundingRect(cnt)
-            aspect = max(w, h) / (min(w, h) + 1)
-            if aspect > 4:
-                continue
-
-            hull = cv2.convexHull(cnt)
-            hull_area = cv2.contourArea(hull)
-            if hull_area == 0:
-                continue
-            solidity = area / hull_area
-            if solidity < 0.75:
-                continue
-
-            rect = cv2.minAreaRect(cnt)
-            rect_w, rect_h = rect[1]
-            if rect_w * rect_h == 0:
-                continue
-            rectangularity = area / (rect_w * rect_h)
-            if rectangularity < 0.3:
-                continue
-
-            circularity = 4 * np.pi * area / (peri * peri)
-            if circularity > 0.7:
-                continue
-
-            approx = cv2.approxPolyDP(cnt, 0.035 * peri, True)
-
+            # Contorno real
             geo_poly = [
-                PoolDetector._pixel_to_geo(pt[0][0], pt[0][1], img.shape[1], img.shape[0], bbox)
-                for pt in approx
+                PoolDetector._pixel_to_geo(pt[0][0], pt[0][1], img_w, img_h, bbox)
+                for pt in cnt
             ]
             if len(geo_poly) < 3:
                 continue
             geo_poly.append(geo_poly[0])
 
-            size_score = min(1.0, area / (img_area * 0.05))
-            shape_score = rectangularity * 0.5 + solidity * 0.3
-            if circularity > 0.01:
-                shape_score += max(0, (0.55 - circularity) / 0.55) * 0.2
+            # Bounding box
+            x, y, w, h = cv2.boundingRect(cnt)
+            bbox_geo = self._bbox_to_polygon(x, y, x + w, y + h, img_w, img_h, bbox)
 
-            confidence = min(0.95, round(size_score * 0.4 + shape_score * 0.6, 3))
-
-            # 1. Feature Bounding Box (etiqueta "bbox")
-            bbox_x1, bbox_y1, bbox_w, bbox_h = cv2.boundingRect(cnt)
-            bbox_x2 = bbox_x1 + bbox_w
-            bbox_y2 = bbox_y1 + bbox_h
-            bbox_geo = self._bbox_to_polygon(
-                bbox_x1, bbox_y1, bbox_x2, bbox_y2,
-                img.shape[1], img.shape[0], bbox,
-            )
             features.append({
                 "type": "Feature",
                 "geometry": {"type": "Polygon", "coordinates": [bbox_geo]},
@@ -248,14 +238,9 @@ class PoolDetector(BaseDetector):
                     "confidence": confidence,
                 },
             })
-
-            # 2. Feature Contorno real (etiqueta "contour")
             features.append({
                 "type": "Feature",
-                "geometry": {
-                    "type": "Polygon",
-                    "coordinates": [geo_poly],
-                },
+                "geometry": {"type": "Polygon", "coordinates": [geo_poly]},
                 "properties": {
                     "detector": self.name,
                     "label": "contour",
@@ -265,69 +250,50 @@ class PoolDetector(BaseDetector):
             })
 
         logger.info(
-            "OpenCV: detectadas %d piscinas en bbox %s", len(features), bbox,
+            "OpenCV: detectadas %d piscinas en bbox %s", len(features) // 2, bbox,
         )
         return {"type": "FeatureCollection", "features": features}
 
-    # ── Refinado de contornos con OpenCV ────────────────────────────
+    # ── Refinado de contornos con OpenCV (pipeline yourkln) ─────────
+
+    _ENLARGEMENT_FACTOR = 0.3  # Ampliar bbox 30% como hace yourkln
 
     def _refine_box_contour(self, img: np.ndarray, box: Dict) -> List:
-        import cv2
+        """Refina una detección YOLO extrayendo el contorno real de la piscina.
+
+        Pipeline (yourkln/pool-detection):
+          1. Ampliar el bbox un 30% para capturar la piscina completa
+          2. Aplicar ``_detect_pool_contours`` al ROI ampliado
+          3. Devolver los puntos del contorno en coordenadas de imagen completa
+        """
+        img_h, img_w = img.shape[:2]
         x1, y1, x2, y2 = int(box["x1"]), int(box["y1"]), int(box["x2"]), int(box["y2"])
-        crop = img[y1:y2, x1:x2]
-        if crop.size == 0:
+
+        # Ampliar bbox 30% (como yourkln)
+        w, h = x2 - x1, y2 - y1
+        dx = int(w * self._ENLARGEMENT_FACTOR)
+        dy = int(h * self._ENLARGEMENT_FACTOR)
+        x1e = max(0, x1 - dx)
+        y1e = max(0, y1 - dy)
+        x2e = min(img_w, x2 + dx)
+        y2e = min(img_h, y2 + dy)
+
+        roi = img[y1e:y2e, x1e:x2e]
+        if roi.size == 0:
             return None
 
-        hsv = cv2.cvtColor(crop, cv2.COLOR_RGB2HSV)
-        lower_blue = np.array([85, 40, 40])
-        upper_blue = np.array([130, 255, 255])
-        mask = cv2.inRange(hsv, lower_blue, upper_blue)
-
-        kernel = np.ones((5, 5), np.uint8)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours = self._detect_pool_contours(roi)
         if not contours:
             return None
 
-        crop_h, crop_w = crop.shape[:2]
-        crop_center = (crop_w / 2, crop_h / 2)
-        crop_area = crop_w * crop_h
-
-        best = None
-        best_score = -1
+        # Devolver todos los contornos ajustados a coordenadas de imagen completa
+        all_points = []
         for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if area < crop_area * 0.05 or area > crop_area * 0.98:
-                continue
-            peri = cv2.arcLength(cnt, True)
-            if peri == 0:
-                continue
-            M = cv2.moments(cnt)
-            if M["m00"] == 0:
-                continue
-            cx = M["m10"] / M["m00"]
-            cy = M["m01"] / M["m00"]
-            dist = np.sqrt((cx - crop_center[0])**2 + (cy - crop_center[1])**2)
-            max_dist = np.sqrt(crop_center[0]**2 + crop_center[1]**2)
-            proximity = 1.0 - dist / max_dist if max_dist > 0 else 1.0
-            area_ratio = area / crop_area
-            area_score = 1.0 - abs(area_ratio - 0.5) * 2
-            score = proximity * 0.5 + area_score * 0.5
-            if score > best_score:
-                best_score = score
-                best = cnt
+            pts = cnt.reshape(-1, 2)
+            pts = pts + np.array([x1e, y1e])
+            all_points.extend(pts.tolist())
 
-        if best is None:
-            return None
-
-        peri = cv2.arcLength(best, True)
-        epsilon = 0.025 * peri
-        approx = cv2.approxPolyDP(best, epsilon, True)
-
-        offset = np.array([x1, y1])
-        return (approx + offset).reshape(-1, 2).tolist()
+        return all_points if all_points else None
 
     # ── Conversión a GeoJSON ────────────────────────────────────────
 
