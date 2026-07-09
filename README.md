@@ -370,6 +370,48 @@ python -m http.server 8080
 
 Navegar a `http://localhost:8080/index.html`
 
+## Desarrollo
+
+Si vas a contribuir codigo, instala las dependencias de desarrollo y activa los
+git hooks. Esto ejecuta [ruff](https://docs.astral.sh/ruff/) (linter + formateador)
+automaticamente en cada commit, arreglando lo que puede y bloqueando el commit
+si quedan errores.
+
+```bash
+cd servidor
+
+# Instalar dependencias de dev (incluye ruff y pre-commit)
+pip install -r requirements-dev.txt
+
+# Enganchar los git hooks (solo una vez por clon)
+pre-commit install
+```
+
+> **Importante**: `pre-commit install` hay que ejecutarlo manualmente una vez por
+> clon. Git no permite versionar los hooks (`.git/hooks/`), asi que este paso no
+> puede automatizarse; el `.pre-commit-config.yaml` (raiz del repo) solo define
+> *que* hooks se ejecutan.
+
+Comandos utiles:
+
+```bash
+# Pasar los hooks sobre TODO el codigo (util la primera vez)
+pre-commit run --all-files
+
+# Ejecutar ruff manualmente
+ruff check servidor            # listar problemas
+ruff check servidor --fix      # arreglar automaticamente
+ruff format servidor           # formatear
+
+# Actualizar la version de los hooks
+pre-commit autoupdate
+
+# Saltar los hooks en un commit puntual (usar con moderacion)
+git commit --no-verify
+```
+
+Las reglas de ruff viven en `ruff.toml` (raiz del repo).
+
 ## Configuracion
 
 Editar `servidor/.env`:
