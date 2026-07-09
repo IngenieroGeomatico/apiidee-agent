@@ -71,7 +71,7 @@ def fetch_wms_image(
         "STYLES": "",
     }
     url = f"{wms_url}?{urlencode(params)}"
-    logger.info("Descargando imagen WMS: %s", url)
+    logger.warning("WMS REQUEST: bbox=%s srs=%s size=%sx%s url=%s", bbox_str, srs, width, height, url)
 
     req = Request(url, headers={"User-Agent": "APIIDEEAgent/1.0"})
     with urlopen(req, timeout=30) as resp:
