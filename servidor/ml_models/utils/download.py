@@ -40,15 +40,8 @@ _MODELS = {
         "description": "YOLOv11n (~5 MB) fine-tuned para detección de piscinas",
         "imgsz": 640,
     },
-    "pool_seg.onnx": {
-        "pt_url": None,
-        "description": (
-            "YOLO11n-seg fine-tuned para segmentación de piscinas. "
-            "Generado con ml_models/utils/train_pool_seg.py. "
-            "Copiar manualmente el ONNX a ml_models/ tras entrenar."
-        ),
-        "imgsz": 640,
-    },
+    # pool_seg.onnx: requiere entrenamiento manual con train_pool_seg.py.
+    # Se registrará aquí cuando haya un modelo disponible para descarga.
 }
 
 
