@@ -1553,10 +1553,12 @@ class ChatAgent {
     var data = await res.json();
 
     var handledToolCall = false;
+    console.log('[ChatAgent] Response content blocks:', JSON.stringify(data.content?.map(function(b) { return b.type; })));
     if (data.content) {
       for (var r = 0; r < data.content.length; r++) {
         var item = data.content[r];
           if (item.type === 'layer') {
+            console.log('[ChatAgent] Layer block found:', item.layer?.type, item.layer?.name, 'features:', item.layer?.source?.features?.length);
             var layerInfo = item.layer;
             var layerType = layerInfo.type;
             if (layerType === 'geojson') {
