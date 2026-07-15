@@ -37,19 +37,19 @@ Agente IA para el visualizador de mapas [API-IDEE](https://github.com/Desarrollo
                      └───────────────────────────┘
 ```
 
-## Conceptos clave (teoria)
+## Conceptos clave (teoría)
 
 ### Agent
 
 Un **agente** es un programa que percibe su entorno, razona sobre ello y ejecuta acciones para lograr un objetivo. A diferencia de un simple "LLM call", un agente:
 
 1. **Recibe entrada** — el mensaje del usuario y el estado actual del mapa
-2. **Busca contexto** — consulta RAG para obtener informacion relevante (codigo fuente, documentacion)
+2. **Busca contexto** — consulta RAG para obtener información relevante (código fuente, documentación)
 3. **Razona** — construye un prompt con skills activos + contexto + estado y llama al LLM
-4. **Decide** — el LLM puede responder texto o solicitar la ejecucion de una tool
-5. **Itera** — si se ejecuto una tool, el agente procesa el resultado y genera una respuesta final
+4. **Decide** — el LLM puede responder texto o solicitar la ejecución de una tool
+5. **Itera** — si se ejecutó una tool, el agente procesa el resultado y genera una respuesta final
 
-El agente **no ejecuta las tools** directamente, solo decide cual invocar. La ejecucion ocurre en el navegador. Esto sigue el patron **"el agente piensa, el plugin actua"**.
+El agente **no ejecuta las tools** directamente, solo decide cuál invocar. La ejecución ocurre en el navegador. Esto sigue el patrón **"el agente piensa, el plugin actúa"**.
 
 ```
 Mensaje usuario
@@ -69,15 +69,15 @@ Mensaje usuario
                          └──────────┘   └────────┘
 ```
 
-Ubicacion: `servidor/agent/agent.py`
+Ubicación: `servidor/agent/agent.py`
 
 ### Tool
 
-Una **tool** es una accion atomica que el agente puede invocar. Cada tool tiene:
+Una **tool** es una acción atómica que el agente puede invocar. Cada tool tiene:
 
-- **Nombre** — identificador unico (ej: `zoomTo`)
-- **Descripcion** — texto que el LLM lee para entender cuando usarla
-- **Parametros** — esquema JSON con los argumentos que necesita
+- **Nombre** — identificador único (ej: `zoomTo`)
+- **Descripción** — texto que el LLM lee para entender cuándo usarla
+- **Parámetros** — esquema JSON con los argumentos que necesita
 
 Las tools se definen en JSON en el servidor y se implementan en JavaScript en el plugin. El LLM nunca ejecuta la tool directamente; solo genera una solicitud de llamada (tool_call) con los argumentos adecuados. El plugin recibe la solicitud, ejecuta la tool sobre el mapa real, y devuelve el resultado al servidor.
 
@@ -97,18 +97,18 @@ Devuelve { success: true }
 LLM procesa resultado y responde al usuario
 ```
 
-Una tool es como una **función** que el agente puede "llamar" pero que ejecuta otro sistema. No hay logica en el servidor para la tool — solo la definicion de su interfaz.
+Una tool es como una **función** que el agente puede "llamar" pero que ejecuta otro sistema. No hay lógica en el servidor para la tool — solo la definición de su interfaz.
 
-**Donde vive**: Definicion en `servidor/agent/tools/definitions/*.json`, implementacion en `plugin/chatagent.js` (CHATAGENT_TOOL_MAP).
+**Dónde vive**: Definición en `servidor/agent/tools/definitions/*.json`, implementación en `plugin/chatagent.js` (CHATAGENT_TOOL_MAP).
 
 ### Skill
 
 Un **skill** es conocimiento de dominio que agrupa:
 
 1. **Un conjunto de tools** relacionadas
-2. **Un prompt especializado** que le dice al LLM *como* y *cuando* usarlas
+2. **Un prompt especializado** que le dice al LLM *cómo* y *cuándo* usarlas
 
-Mientras que una tool solo dice "que hace", un skill dice "como usarla bien". Por ejemplo, el skill `navigation` incluye:
+Mientras que una tool solo dice "qué hace", un skill dice "cómo usarla bien". Por ejemplo, el skill `navigation` incluye:
 
 ```yaml
 tools: [getMapCenter, getCurrentZoom, zoomTo, setZoom]
@@ -119,25 +119,25 @@ prompt: |
   Siempre confirma lo que hiciste.
 ```
 
-Los skills se inyectan en el system prompt del LLM, por lo que actuan como **instrucciones contextuales** que mejoran la calidad de las respuestas sin necesidad de fine-tuning.
+Los skills se inyectan en el system prompt del LLM, por lo que actúan como **instrucciones contextuales** que mejoran la calidad de las respuestas sin necesidad de fine-tuning.
 
-A diferencia de las tools (que son puramente mecanicas), los skills codifican **buenas practicas** y **flujos de trabajo** especificos del dominio.
+A diferencia de las tools (que son puramente mecánicas), los skills codifican **buenas prácticas** y **flujos de trabajo** específicos del dominio.
 
-**Donde vive**: `servidor/agent/skills/definitions/*.yaml`
+**Dónde vive**: `servidor/agent/skills/definitions/*.yaml`
 
 ### Embedding
 
-Un **embedding** es una representacion numerica de texto en forma de vector (lista de numeros). La idea clave es:
+Un **embedding** es una representación numérica de texto en forma de vector (lista de números). La idea clave es:
 
-- Textos con significado similar tienen vectores **cercanos** (distancia pequena)
+- Textos con significado similar tienen vectores **cercanos** (distancia pequeña)
 - Textos con significado diferente tienen vectores **lejanos** (distancia grande)
 
-Esto permite busqueda semantica: en vez de buscar por palabras exactas (como `grep`), podemos buscar por **significado**. Por ejemplo, "como anyado una capa al mapa" y "anadir wms" generan vectores cercanos aunque no compartan palabras.
+Esto permite búsqueda semántica: en vez de buscar por palabras exactas (como `grep`), podemos buscar por **significado**. Por ejemplo, "cómo añado una capa al mapa" y "añadir wms" generan vectores cercanos aunque no compartan palabras.
 
 En el proyecto, los embeddings se usan en el pipeline RAG:
 
-1. **Indexacion**: los documentos (codigo, documentacion) se trocean en chunks y cada chunk se convierte a vector con un modelo de embeddings. Los vectores se guardan en FAISS (indice de busqueda vectorial).
-2. **Consulta**: el mensaje del usuario se convierte al mismo tipo de vector. FAISS busca los chunks con vectores mas cercanos y los devuelve como contexto para el LLM.
+1. **Indexación**: los documentos (código, documentación) se trocean en chunks y cada chunk se convierte a vector con un modelo de embeddings. Los vectores se guardan en FAISS (índice de búsqueda vectorial).
+2. **Consulta**: el mensaje del usuario se convierte al mismo tipo de vector. FAISS busca los chunks con vectores más cercanos y los devuelve como contexto para el LLM.
 
 El proyecto soporta tres tipos de embeddings:
 
@@ -147,20 +147,20 @@ El proyecto soporta tres tipos de embeddings:
 | OpenAI | `text-embedding-3-small` | API key de OpenAI | Alta calidad, ingles |
 | Gemini | `models/embedding-001` | API key de Google | Alta calidad, multilingue |
 
-El modelo por defecto es **local** con `BAAI/bge-m3`, un modelo multilingüe gratuito que funciona bien con espanol. El resultado de `get_embeddings()` se **cachea** para evitar recrear el modelo en cada peticion.
+El modelo por defecto es **local** con `BAAI/bge-m3`, un modelo multilingüe gratuito que funciona bien con español. El resultado de `get_embeddings()` se **cachea** para evitar recrear el modelo en cada petición.
 
-**Donde vive**: `servidor/agent/rag/embeddings.py`
+**Dónde vive**: `servidor/agent/rag/embeddings.py`
 
 ### MCP (Model Context Protocol)
 
-**MCP** (Model Context Protocol) es un protocolo abierto creado por Anthropic que estandariza como los modelos de IA se conectan con herramientas y fuentes de datos externas. Piensa en el como un "USB-C para la IA": define una interfaz universal donde servidores MCP exponen tools, recursos y prompts mediante JSON-RPC.
+**MCP** (Model Context Protocol) es un protocolo abierto creado por Anthropic que estandariza cómo los modelos de IA se conectan con herramientas y fuentes de datos externas. Piensa en él como un "USB-C para la IA": define una interfaz universal donde servidores MCP exponen tools, recursos y prompts mediante JSON-RPC.
 
 En este proyecto, MCP convive con el sistema de tools nativo:
 
-- **Tools del mapa** (nativas): se definen en `tools/definitions/*.json`, se ejecutan en el navegador via el plugin JS.
-- **Tools MCP** (externas): se descubren automaticamente via `tools/list` al arrancar el servidor, se ejecutan en el servidor via JSON-RPC.
+- **Tools del mapa** (nativas): se definen en `tools/definitions/*.json`, se ejecutan en el navegador vía el plugin JS.
+- **Tools MCP** (externas): se descubren automáticamente vía `tools/list` al arrancar el servidor, se ejecutan en el servidor vía JSON-RPC.
 
-El LLM no distingue el origen de una tool — solo ve su nombre, descripcion y parametros. Cuando el LLM decide llamar a una tool MCP, el agente la ejecuta directamente en el servidor, realimenta el resultado al LLM y continua la conversacion en un bucle. Las tools del mapa se siguen devolviendo al frontend como antes.
+El LLM no distingue el origen de una tool — solo ve su nombre, descripción y parámetros. Cuando el LLM decide llamar a una tool MCP, el agente la ejecuta directamente en el servidor, realimenta el resultado al LLM y continúa la conversación en un bucle. Las tools del mapa se siguen devolviendo al frontend como antes.
 
 ```
 LLM decide usar tool
@@ -188,7 +188,7 @@ tool_call { name: "get_weather", args: { city: "Madrid" } }
 
 Las tools MCP son ideales para operaciones que no requieren el mapa: consultar APIs externas, bases de datos, sistemas de ficheros, etc.
 
-**Donde vive**: `servidor/agent/mcp/` — configuracion en `mcp_servers.json`
+**Dónde vive**: `servidor/agent/mcp/` — configuración en `mcp_servers.json`
 
 ### Resumen visual de las relaciones
 
@@ -225,7 +225,7 @@ EMBEDDINGS (modelo)          FAISS (indice)
                           └──────────────────┘
 ```
 
-## Arquitectura: como se conectan Agent, Skills, Tools, Embeddings
+## Arquitectura: cómo se conectan Agent, Skills, Tools, Embeddings
 
 ```
                     ┌──────────────────────────────────────┐
@@ -270,22 +270,22 @@ EMBEDDINGS (modelo)          FAISS (indice)
 
 ### Flujo detallado
 
-1. **Skills** → definen herramientas + contexto de uso. Ej: el skill `navigation` agrupa `zoomTo`, `getMapCenter` y da instrucciones al LLM sobre como navegar.
+1. **Skills** → definen herramientas + contexto de uso. Ej: el skill `navigation` agrupa `zoomTo`, `getMapCenter` y da instrucciones al LLM sobre cómo navegar.
 
-2. **Tools** → acciones atomicas definidas en JSON (servidor) e implementadas en JS (plugin). El LLM decide cual invocar segun la peticion del usuario.
+2. **Tools** → acciones atómicas definidas en JSON (servidor) e implementadas en JS (plugin). El LLM decide cuál invocar según la petición del usuario.
 
-3. **RAG (Embeddings + FAISS)** → los documentos se trocean en chunks, se convierten a vectores con un modelo de embeddings y se guardan en FAISS. En cada consulta, el mensaje del usuario se convierte al mismo tipo de vector y se buscan los chunks mas similares. Las stores FAISS y los modelos de embeddings se **cachean en memoria** para evitar recargarlos en cada peticion.
+3. **RAG (Embeddings + FAISS)** → los documentos se trocean en chunks, se convierten a vectores con un modelo de embeddings y se guardan en FAISS. En cada consulta, el mensaje del usuario se convierte al mismo tipo de vector y se buscan los chunks más similares. Las stores FAISS y los modelos de embeddings se **cachean en memoria** para evitar recargarlos en cada petición.
 
-4. **Agent** → orquesta todo: recibe el mensaje, pide contexto a RAG, inyecta los skills activos y el estado del mapa en el prompt, llama al LLM, y si el LLM devuelve un tool_call, lo reenvia al plugin para ejecutarlo.
+4. **Agent** → orquesta todo: recibe el mensaje, pide contexto a RAG, inyecta los skills activos y el estado del mapa en el prompt, llama al LLM, y si el LLM devuelve un tool_call, lo reenvía al plugin para ejecutarlo.
 
-### Donde se configura cada pieza
+### Dónde se configura cada pieza
 
-| Pieza | Configuracion | Proveedores |
+| Pieza | Configuración | Proveedores |
 |-------|--------------|-------------|
 | **LLM** | `LLM_PROVIDER` + `LLM_MODEL` en `.env`, o API key propia desde el plugin | Gemini, OpenAI (y cualquier proveedor compatible con API OpenAI via `providers.json`) |
 | **Embeddings** | `EMBEDDINGS_PROVIDER` + `EMBEDDINGS_MODEL` en `.env` | Local (FastEmbed, default `BAAI/bge-m3`), OpenAI, Gemini |
-| **Tools** | JSON en `servidor/agent/tools/definitions/` | Auto-descubiertos al arrancar |
-| **Skills** | YAML en `servidor/agent/skills/definitions/` | Auto-descubiertos al arrancar |
+| **Tools** | JSON en `servidor/agent/tools/definitions/` | Autodescubiertos al arrancar |
+| **Skills** | YAML en `servidor/agent/skills/definitions/` | Autodescubiertos al arrancar |
 | **RAG** | `index_source` CLI + `VECTORSTORE_DIR` en `.env` | FAISS + embeddings (cacheados en memoria) |
 
 ## Requisitos
@@ -304,7 +304,7 @@ EMBEDDINGS (modelo)          FAISS (indice)
 - Python 3.11+
 - Git
 
-## Instalacion con Docker
+## Instalación con Docker
 
 ```bash
 # 1. Clonar
@@ -321,23 +321,23 @@ docker compose up
 # 4. Abrir http://localhost:8080
 ```
 
-Eso es todo. El servidor Django (gunicorn) arranca en el puerto 8000 y el visualizador (nginx) en el 8080. Los modelos ML se descargan automaticamente en el primer arranque.
+Eso es todo. El servidor Django (gunicorn) arranca en el puerto 8000 y el visualizador (nginx) en el 8080. Los modelos ML se descargan automáticamente en el primer arranque.
 
-Para reconstruir tras cambios en el codigo:
+Para reconstruir tras cambios en el código:
 
 ```bash
 docker compose up --build
 ```
 
-### Volumenes persistentes
+### Volúmenes persistentes
 
-| Volumen | Contenido | Proposito |
+| Volumen | Contenido | Propósito |
 |---------|-----------|-----------|
 | `db_data` | `db.sqlite3` | Base de datos de conversaciones |
 | `ml_models` | `pool_detector.onnx` | Pesos del modelo ML (se descargan una vez) |
-| `vectorstore_data` | Indices FAISS | Conocimiento indexado para RAG |
+| `vectorstore_data` | Índices FAISS | Conocimiento indexado para RAG |
 
-## Instalacion manual (sin Docker)
+## Instalación manual (sin Docker)
 
 ### 1. Clonar el repositorio
 
@@ -376,7 +376,7 @@ python manage.py runserver
 
 ### 3. Servir el visualizador
 
-En otra terminal, desde la raiz del proyecto:
+En otra terminal, desde la raíz del proyecto:
 
 ```bash
 python -m http.server 8080
@@ -388,9 +388,9 @@ Navegar a `http://localhost:8080/index.html`
 
 ## Desarrollo
 
-Si vas a contribuir codigo, instala las dependencias de desarrollo y activa los
+Si vas a contribuir código, instala las dependencias de desarrollo y activa los
 git hooks. Esto ejecuta [ruff](https://docs.astral.sh/ruff/) (linter + formateador)
-automaticamente en cada commit, arreglando lo que puede y bloqueando el commit
+automáticamente en cada commit, arreglando lo que puede y bloqueando el commit
 si quedan errores.
 
 ```bash
@@ -404,11 +404,11 @@ pre-commit install
 ```
 
 > **Importante**: `pre-commit install` hay que ejecutarlo manualmente una vez por
-> clon. Git no permite versionar los hooks (`.git/hooks/`), asi que este paso no
-> puede automatizarse; el `.pre-commit-config.yaml` (raiz del repo) solo define
-> *que* hooks se ejecutan.
+> clon. Git no permite versionar los hooks (`.git/hooks/`), así que este paso no
+> puede automatizarse; el `.pre-commit-config.yaml` (raíz del repo) solo define
+> *qué* hooks se ejecutan.
 
-Comandos utiles:
+Comandos útiles:
 
 ```bash
 # Pasar los hooks sobre TODO el codigo (util la primera vez)
@@ -426,9 +426,9 @@ pre-commit autoupdate
 git commit --no-verify
 ```
 
-Las reglas de ruff viven en `ruff.toml` (raiz del repo).
+Las reglas de ruff viven en `ruff.toml` (raíz del repo).
 
-## Configuracion
+## Configuración
 
 Editar `servidor/.env`:
 
@@ -490,7 +490,7 @@ Puedes usar cualquier proveedor compatible con la API de OpenAI (Groq, Cerebras,
 
 ## Indexar conocimiento (RAG)
 
-El agente necesita conocimiento para responder. Usa el comando `index_source` para indexar repositorios git o documentacion web:
+El agente necesita conocimiento para responder. Usa el comando `index_source` para indexar repositorios git o documentación web:
 
 ```bash
 cd servidor
@@ -508,17 +508,17 @@ python manage.py index_source https://componentes.idee.es/api-idee/doc/ --type w
 python manage.py index_source https://github.com/Desarrollos-IDEE/API-IDEE --type git --batch-size 50
 ```
 
-Los indices se guardan en `servidor/vectorstore_data/` (no se suben al repo). Una vez indexados, las stores FAISS se **cachean en memoria** para que las consultas sean rapidas sin recargar de disco.
+Los índices se guardan en `servidor/vectorstore_data/` (no se suben al repo). Una vez indexados, las stores FAISS se **cachean en memoria** para que las consultas sean rápidas sin recargar de disco.
 
-> **Nota**: `--batch-size` controla cuantos chunks se embeden a la vez. Por defecto 100. Reducirlo baja el consumo de RAM pero ralentiza el proceso.
+> **Nota**: `--batch-size` controla cuántos chunks se embeden a la vez. Por defecto 100. Reducirlo baja el consumo de RAM pero ralentiza el proceso.
 
 > **Nota**: Si reindexas una fuente, usa `clear_faiss_cache()` o reinicia el servidor para que los cambios surtan efecto.
 
-## Anadir tools
+## Añadir tools
 
 Los tools son acciones que el agente puede ejecutar en el mapa. Tienen dos partes:
 
-### 1. Definicion (servidor)
+### 1. Definición (servidor)
 
 Crear un fichero JSON en `servidor/agent/tools/definitions/`:
 
@@ -538,7 +538,7 @@ Crear un fichero JSON en `servidor/agent/tools/definitions/`:
 
 ### 2. Ejecutor (plugin JS)
 
-Anadir la implementacion en `plugin/chatagent.js`, dentro de `CHATAGENT_TOOL_MAP`:
+Añadir la implementación en `plugin/chatagent.js`, dentro de `CHATAGENT_TOOL_MAP`:
 
 ```javascript
 miNuevoTool: function(map, args) {
@@ -548,29 +548,29 @@ miNuevoTool: function(map, args) {
 },
 ```
 
-No hay que tocar Python. El sistema auto-descubre los JSON al arrancar.
+No hay que tocar Python. El sistema autodescubre los JSON al arrancar.
 
 ### Tools disponibles
 
-| Tool | Tipo | Ejecutor | Descripcion |
+| Tool | Tipo | Ejecutor | Descripción |
 |------|------|----------|-------------|
 | `getMapCenter` | Lectura | Frontend | Coordenadas del centro del mapa |
 | `getCurrentZoom` | Lectura | Frontend | Nivel de zoom actual |
 | `listActiveLayers` | Lectura | Frontend | Lista de capas activas |
 | `getMapExtent` | Lectura | Frontend | Bounding box de la vista actual |
-| `addLayer` | Escritura | Frontend | Anadir capa al mapa (WMS, WMTS, GeoJSON, etc.) |
+| `addLayer` | Escritura | Frontend | Añadir capa al mapa (WMS, WMTS, GeoJSON, etc.) |
 | `zoomTo` | Escritura | Frontend | Mover el mapa a coordenadas |
 | `removeLayer` | Escritura | Frontend | Eliminar una capa por nombre |
 | `setZoom` | Escritura | Frontend | Cambiar nivel de zoom |
-| `fetchWebPage` | Lectura | Servidor | Descargar y extraer texto de una pagina web |
+| `fetchWebPage` | Lectura | Servidor | Descargar y extraer texto de una página web |
 | `geocodePlace` | Lectura | Servidor | Geocodificar un lugar con Cartociudad |
 | `searchIdeeService` | Lectura | Servidor | Buscar servicios en el directorio IDEE (paralelo) |
 | `listDetectors` | Lectura | Servidor | Listar detectores ML disponibles |
 | `detectObjects` | Escritura | Servidor | Ejecutar detector ML sobre zona del mapa |
 
-## Anadir skills
+## Añadir skills
 
-Los skills enseñan al agente cuando y como usar un grupo de tools. Son ficheros YAML.
+Los skills enseñan al agente cuándo y cómo usar un grupo de tools. Son ficheros YAML.
 
 Crear un fichero en `servidor/agent/skills/definitions/`:
 
@@ -588,24 +588,24 @@ prompt: |
   3. Siempre confirma al usuario lo que hiciste
 ```
 
-No hay que tocar Python. El sistema auto-descubre los YAML al arrancar.
+No hay que tocar Python. El sistema autodescubre los YAML al arrancar.
 
 ### Skills disponibles
 
-| Skill | Tools que usa | Descripcion |
+| Skill | Tools que usa | Descripción |
 |-------|---------------|-------------|
 | `navigation` | getMapCenter, getCurrentZoom, getMapExtent, zoomTo, setZoom | Navegar por el mapa y buscar ubicaciones |
 | `layer_management` | listActiveLayers, addWMSLayer, removeLayer | Gestionar capas del visualizador |
 
-## Integracion MCP
+## Integración MCP
 
-Este proyecto soporta el protocolo MCP (Model Context Protocol) para conectar con servidores externos de herramientas. Las tools MCP se descubren automaticamente, se registran junto a las tools nativas del mapa y se ejecutan en el servidor.
+Este proyecto soporta el protocolo MCP (Model Context Protocol) para conectar con servidores externos de herramientas. Las tools MCP se descubren automáticamente, se registran junto a las tools nativas del mapa y se ejecutan en el servidor.
 
-### Como agregar un servidor MCP
+### Cómo agregar un servidor MCP
 
 Las tools del mapa y las MCP conviven sin conflicto. Si una tool MCP tiene el mismo nombre que una existente, se omite con un aviso.
 
-### 1. Copiar el archivo de configuracion
+### 1. Copiar el archivo de configuración
 
 ```bash
 cd servidor
@@ -626,15 +626,15 @@ Editar `servidor/mcp_servers.json`:
 ]
 ```
 
-| Campo | Descripcion |
+| Campo | Descripción |
 |-------|-------------|
 | `name` | Nombre identificativo del servidor (solo para logs) |
 | `url` | Endpoint HTTP donde el servidor MCP acepta JSON-RPC |
-| `timeout` | Tiempo maximo de espera en segundos (opcional, por defecto 30) |
+| `timeout` | Tiempo máximo de espera en segundos (opcional, por defecto 30) |
 
 ### 3. Arrancar el servidor Django
 
-Al iniciar, el sistema se conecta a los servidores MCP configurados, descubre sus tools via `tools/list` y las registra automaticamente:
+Al iniciar, el sistema se conecta a los servidores MCP configurados, descubre sus tools vía `tools/list` y las registra automáticamente:
 
 ```bash
 python manage.py runserver
@@ -647,11 +647,11 @@ Connected to MCP server 'mi-servidor' (3 tools)
 Registered 3 MCP tools in the tool registry
 ```
 
-A partir de ahi, el LLM puede invocar las tools MCP como si fueran nativas. No hace falta reiniciar ni tocar codigo.
+A partir de ahí, el LLM puede invocar las tools MCP como si fueran nativas. No hace falta reiniciar ni tocar código.
 
 ### MCP es opcional
 
-Si no configuras servidores MCP, el sistema funciona exactamente igual que antes — el agente simplemente no tiene tools MCP registradas y todo el flujo sigue yendo al frontend. Los tres procesos posibles quedarian asi:
+Si no configuras servidores MCP, el sistema funciona exactamente igual que antes — el agente simplemente no tiene tools MCP registradas y todo el flujo sigue yendo al frontend. Los tres procesos posibles quedarían así:
 
 | Proceso | Comando | Puerto | Obligatorio |
 |---------|---------|--------|-------------|
@@ -681,7 +681,7 @@ Si `stream` es `false` o no se incluye, el endpoint se comporta exactamente igua
 
 La respuesta es `Content-Type: text/event-stream` con los siguientes eventos:
 
-| Evento | Datos | Descripcion |
+| Evento | Datos | Descripción |
 |--------|-------|-------------|
 | `text_delta` | `{"type": "text_delta", "text": "..."}` | Fragmento incremental de texto |
 | `tool_call` | `{"type": "tool_call", "toolCalls": [...]}` | Tool calls del mapa para el frontend |
@@ -698,25 +698,25 @@ const chatAgent = new IDEE.plugin.ChatAgent({
 });
 ```
 
-## Deteccion de objetos (ML)
+## Detección de objetos (ML)
 
-El agente incluye un pipeline de deteccion de objetos sobre imagenes aereas. Actualmente soporta deteccion de **piscinas** usando un modelo YOLOv11n fine-tuned (~5 MB ONNX).
+El agente incluye un pipeline de detección de objetos sobre imágenes aéreas. Actualmente soporta detección de **piscinas** usando un modelo YOLOv11n fine-tuned (~5 MB ONNX).
 
-### Como funciona
+### Cómo funciona
 
 1. El LLM decide usar la tool `detectObjects` cuando el usuario lo pide
-2. El servidor descarga la imagen de la zona via WMS (ortofoto PNOA por defecto)
+2. El servidor descarga la imagen de la zona vía WMS (ortofoto PNOA por defecto)
 3. Ejecuta el detector ONNX sobre la imagen
 4. Devuelve un GeoJSON FeatureCollection con las detecciones
 5. El plugin carga el GeoJSON como capa en el mapa
 
 ### Modelo
 
-El modelo se descarga y convierte automaticamente al arrancar el servidor:
+El modelo se descarga y convierte automáticamente al arrancar el servidor:
 
 - **Origen**: [yourkln/pool-detection](https://github.com/yourkln/pool-detection) (YOLOv11n fine-tuned)
 - **Formato**: ONNX (~10 MB), se ejecuta con `onnxruntime` (sin PyTorch)
-- **Fallback**: Si el modelo no esta disponible, usa segmentacion por color con OpenCV
+- **Fallback**: Si el modelo no está disponible, usa segmentación por color con OpenCV
 
 ```bash
 # Descarga manual del modelo
@@ -726,47 +726,47 @@ python -m ml_models.download
 
 ### Detectores disponibles
 
-| Detector | Modelo | Descripcion |
+| Detector | Modelo | Descripción |
 |----------|--------|-------------|
 | `pool_detector` | YOLOv11n (ONNX) | Detecta piscinas en ortofotos |
 
-Para anadir nuevos detectores, crear una clase en `servidor/agent/ml/detectors/` heredando de `BaseDetector` y decorarla con `@detector`.
+Para añadir nuevos detectores, crear una clase en `servidor/agent/ml/detectors/` heredando de `BaseDetector` y decorarla con `@detector`.
 
 ## Rendimiento y thread-safety
 
 ### Caches thread-safe
 
-Todos los caches del servidor estan protegidos con `threading.Lock` para garantizar thread-safety en servidores multi-hilo:
+Todos los caches del servidor están protegidos con `threading.Lock` para garantizar thread-safety en servidores multihilo:
 
 - **Embeddings**: modelo singleton con double-check locking
-- **FAISS stores**: indices cargados una vez desde disco y cacheados en memoria
-- **Agent cache**: LRU de hasta 128 entradas por combinacion proveedor/modelo/key
+- **FAISS stores**: índices cargados una vez desde disco y cacheados en memoria
+- **Agent cache**: LRU de hasta 128 entradas por combinación proveedor/modelo/key
 
-### Busqueda paralela de servicios IDEE
+### Búsqueda paralela de servicios IDEE
 
-La tool `searchIdeeService` consulta las 6 categorias del directorio IDEE en paralelo usando `ThreadPoolExecutor`, en vez de secuencialmente.
+La tool `searchIdeeService` consulta las 6 categorías del directorio IDEE en paralelo usando `ThreadPoolExecutor`, en vez de secuencialmente.
 
 ## Historial de conversaciones
 
 Las conversaciones se persisten en el servidor y el plugin las gestiona en el navegador.
 
-### Como funciona
+### Cómo funciona
 
 - El plugin guarda los IDs de sus conversaciones en `localStorage` (`chatagent_conversations`)
-- Al abrir el chat, pide al servidor solo sus conversaciones via `POST /api/conversations/by-ids/`
-- Un panel lateral (icono reloj en el header) muestra el historial con titulo y fecha
-- Click en una conversacion la reanuda, cargando sus mensajes
-- Boton "Nueva conversacion" para empezar de cero
+- Al abrir el chat, pide al servidor solo sus conversaciones vía `POST /api/conversations/by-ids/`
+- Un panel lateral (icono reloj en el header) muestra el historial con título y fecha
+- Click en una conversación la reanuda, cargando sus mensajes
+- Botón "Nueva conversación" para empezar de cero
 
-### Limites configurables
+### Límites configurables
 
-| Variable | Default | Descripcion |
+| Variable | Default | Descripción |
 |----------|---------|-------------|
-| `CONVERSATION_TTL_HOURS` | 24 | Horas sin actividad tras las que se borra una conversacion |
-| `CONVERSATION_MAX_PER_CLIENT` | 10 | Maximo de conversaciones por cliente (FIFO en localStorage) |
-| `CONVERSATION_CLEANUP_INTERVAL_SECONDS` | 3600 | Intervalo minimo entre limpiezas automaticas |
+| `CONVERSATION_TTL_HOURS` | 24 | Horas sin actividad tras las que se borra una conversación |
+| `CONVERSATION_MAX_PER_CLIENT` | 10 | Máximo de conversaciones por cliente (FIFO en localStorage) |
+| `CONVERSATION_CLEANUP_INTERVAL_SECONDS` | 3600 | Intervalo mínimo entre limpiezas automáticas |
 
-La limpieza se ejecuta automaticamente (lazy) al crear conversaciones. Tambien se puede lanzar manualmente:
+La limpieza se ejecuta automáticamente (lazy) al crear conversaciones. También se puede lanzar manualmente:
 
 ```bash
 # Limpiar conversaciones expiradas
@@ -846,17 +846,17 @@ apiidee-agent/
 
 ## API REST
 
-| Metodo | Endpoint | Descripcion |
+| Método | Endpoint | Descripción |
 |--------|----------|-------------|
-| `POST` | `/api/conversations/` | Crear conversacion |
+| `POST` | `/api/conversations/` | Crear conversación |
 | `GET` | `/api/conversations/` | Listar conversaciones |
-| `GET` | `/api/conversations/{id}/` | Obtener conversacion |
-| `DELETE` | `/api/conversations/{id}/` | Eliminar conversacion |
+| `GET` | `/api/conversations/{id}/` | Obtener conversación |
+| `DELETE` | `/api/conversations/{id}/` | Eliminar conversación |
 | `GET` | `/api/conversations/{id}/messages/` | Listar mensajes |
 | `POST` | `/api/conversations/{id}/chat/` | Enviar mensaje (responde texto, tool_call o SSE si `stream=true`) |
-| `POST` | `/api/conversations/{id}/tool-result/` | Enviar resultado de ejecucion de tool |
+| `POST` | `/api/conversations/{id}/tool-result/` | Enviar resultado de ejecución de tool |
 | `POST` | `/api/conversations/by-ids/` | Obtener conversaciones por lista de UUIDs (para el plugin) |
-| `GET` | `/api/conversation-config/` | Configuracion de conversaciones (TTL, limite por cliente) |
+| `GET` | `/api/conversation-config/` | Configuración de conversaciones (TTL, límite por cliente) |
 | `POST` | `/api/test-key/` | Probar API key contra un proveedor (`provider` + `api_key`) |
 
 ### Ejemplo: enviar mensaje
@@ -913,7 +913,7 @@ Content-Type: application/json
 }
 ```
 
-El campo `api_key` es opcional. Si se omite, se usa la clave configurada en el servidor. Cuando el usuario ha guardado una API key para el proveedor seleccionado desde el plugin, el campo `api_key` se envia automaticamente con cada mensaje.
+El campo `api_key` es opcional. Si se omite, se usa la clave configurada en el servidor. Cuando el usuario ha guardado una API key para el proveedor seleccionado desde el plugin, el campo `api_key` se envía automáticamente con cada mensaje.
 
 ## Plugin API-IDEE
 
@@ -941,11 +941,11 @@ El plugin se integra como cualquier otro plugin de API-IDEE:
 </script>
 ```
 
-El plugin incluye un boton de configuracion (⚙) en la cabecera que permite al usuario:
+El plugin incluye un botón de configuración (⚙) en la cabecera que permite al usuario:
 - Seleccionar proveedor y modelo
 - Introducir su propia API key
 
-## Flujo de ejecucion
+## Flujo de ejecución
 
 ```
 1. Usuario escribe mensaje en el chat
