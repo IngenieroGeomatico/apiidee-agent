@@ -595,7 +595,7 @@ No hay que tocar Python. El sistema autodescubre los YAML al arrancar.
 | Skill | Tools que usa | Descripción |
 |-------|---------------|-------------|
 | `navigation` | getMapCenter, getCurrentZoom, getMapExtent, zoomTo, setZoom | Navegar por el mapa y buscar ubicaciones |
-| `layer_management` | listActiveLayers, addWMSLayer, removeLayer | Gestionar capas del visualizador |
+| `layer_management` | listActiveLayers, addLayer, removeLayer, searchIdeeService, fetchWebPage | Gestionar capas del visualizador |
 
 ## Integración MCP
 
